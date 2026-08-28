@@ -1,6 +1,6 @@
 {
   "driver_id": "homeassistantcustom",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "release_date": "2026-08-28",
   "min_core_api": "0.24.3",
   "name": {
@@ -12,7 +12,6 @@
     "en": "Standalone Home Assistant command integration for a floor lamp",
     "de": "Eigenständige Home-Assistant-Befehlsintegration für eine Stehlampe"
   },
-  "port": 19123,
   "developer": {
     "name": "Marci",
     "url": "https://github.com/celle150190-prog/uc-intg-homeassistentcustom"

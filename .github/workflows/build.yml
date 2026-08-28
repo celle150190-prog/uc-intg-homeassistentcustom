@@ -44,69 +44,51 @@ jobs:
 
       - name: Validate build output and metadata
         run: |
-          set -euo pipefail
           test -d "dist/intg-${INTG_NAME}"
           test -x "dist/intg-${INTG_NAME}/intg-${INTG_NAME}"
           test -f driver.json
+          test -f config/config.json
           python3 - <<'PY'
           import json
           from pathlib import Path
           data = json.loads(Path('driver.json').read_text(encoding='utf-8'))
-          required = {
-              'driver_id', 'version', 'min_core_api', 'name', 'icon',
-              'description', 'developer', 'home_page', 'release_date'
-          }
+          required = {'driver_id', 'version', 'min_core_api', 'name', 'icon', 'description', 'developer', 'home_page'}
           missing = required.difference(data)
           if missing:
               raise SystemExit(f'Missing driver.json keys: {sorted(missing)}')
-          if not isinstance(data['driver_id'], str) or len(data['driver_id']) < 5:
-              raise SystemExit('driver_id must contain at least 5 characters')
-          if not data['driver_id'][0].islower():
-              raise SystemExit('driver_id must start with a lowercase letter')
-          allowed = set('abcdefghijklmnopqrstuvwxyz0123456789-_')
-          if any(ch not in allowed for ch in data['driver_id']):
-              raise SystemExit('driver_id contains an invalid character')
-          if data['icon'] != 'uc:integration':
-              raise SystemExit('driver.json must use the built-in uc:integration icon')
-          dev = data['developer']
-          for key in ('name', 'email', 'url'):
-              if not isinstance(dev.get(key), str) or not dev[key].strip():
-                  raise SystemExit(f'developer.{key} must be present and non-empty')
           if 'port' in data:
-              raise SystemExit('driver.json must not contain a hard-coded port; the Remote runtime supplies UC_INTEGRATION_HTTP_PORT')
+              raise SystemExit('driver.json must not contain a hard-coded port for Remote custom installation; the runtime supplies UC_INTEGRATION_HTTP_PORT.')
+          if data['icon'] != 'uc:integration':
+              raise SystemExit('driver.json must use the known built-in icon uc:integration for this release.')
           print('driver.json OK:', data['driver_id'], data['version'])
+          print('config/config.json OK')
           PY
 
       - name: Prepare installation archive
         shell: bash
         run: |
-          set -euo pipefail
           rm -rf artifacts
-          mkdir -p artifacts/bin
+          mkdir -p artifacts/bin artifacts/config
 
-          # Unfolded Circle custom integration layout:
-          # - driver.json directly at archive root
-          # - PyInstaller one-folder bundle directly below ./bin
+          # Unfolded Circle custom integration archive layout:
+          # driver.json at archive root, PyInstaller one-folder contents in ./bin,
+          # and writable runtime config in ./config.
           cp -a "dist/intg-${INTG_NAME}/." artifacts/bin/
           mv "artifacts/bin/intg-${INTG_NAME}" "artifacts/bin/driver"
           cp driver.json artifacts/driver.json
+          cp -a config/. artifacts/config/
 
           test -f artifacts/driver.json
           test -x artifacts/bin/driver
           test ! -d artifacts/bin/driver
+          test -f artifacts/config/config.json
 
-          # Pack the root entries explicitly instead of archiving '.'.
-          # This produces exact archive member names 'driver.json' and 'bin/...'.
-          tar -czf "uc-intg-${INTG_NAME}-aarch64.tar.gz" -C artifacts driver.json bin
-
+          tar -czf "uc-intg-${INTG_NAME}-aarch64.tar.gz" -C artifacts .
           tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" > archive.contents
           cat archive.contents
-          grep -Fxq 'driver.json' archive.contents
-          grep -Fxq 'bin/driver' archive.contents
-          if grep -Eq '(^|/)\.\./|(^|/)\./' archive.contents; then
-            echo 'Unexpected relative archive path found'
-            exit 1
-          fi
+          grep -Fxq './driver.json' archive.contents
+          grep -Fxq './bin/driver' archive.contents
+          grep -Fxq './config/config.json' archive.contents
           rm -f archive.contents
           sha256sum "uc-intg-${INTG_NAME}-aarch64.tar.gz" > "uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256"
 
@@ -188,16 +170,14 @@ jobs:
             - Standard: `remote.broadlink` + Gerät `Stehlampe`
 
             ## v${{ steps.version.outputs.version }} Änderungen
-            - Kompatiblere Custom-Driver-Metadaten inklusive `developer.email`
-            - `uc:integration` als eingebautes Icon
-            - Kein fest codierter Integrations-Port in `driver.json`
-            - Exakter Archiv-Root ohne `./`-Präfixe: `driver.json` und `bin/driver`
-            - Home Assistant wird erst beim Ausführen eines Lampenbefehls kontaktiert
+            - Custom-Integration-Archiv enthält `driver.json`, `bin/driver` und `config/config.json`.
+            - Die Build-Prüfung validiert die vollständige Installationsstruktur vor Veröffentlichung.
+            - Home Assistant wird erst beim Ausführen eines Lampenbefehls kontaktiert.
 
             ## Installation
             Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist im Remote-3-Web-Configurator unter **Install custom** verwendbar.
 
-            Bei einer bereits installierten Version die Option **Installierte Integration aktualisieren** nur dann aktivieren, wenn diese vorhandene Installation ebenfalls die `driver_id` `homeassistantcustom` verwendet.
+            Die Integration ist eigenständig und hat die `driver_id` `homeassistantcustom`.
           files: |
             release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz
             release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz.sha256

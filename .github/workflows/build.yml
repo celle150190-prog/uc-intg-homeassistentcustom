@@ -36,29 +36,34 @@ jobs:
             bash -c \
             "cd /workspace && \
              python -m pip install -r requirements.txt && \
-             pyinstaller --clean --onedir --name intg-${INTG_NAME} driver.py"
+             pyinstaller --clean --onedir --add-data 'driver.json:.' --name intg-${INTG_NAME} driver.py"
 
       - name: Validate build output and metadata
         run: |
           test -d "dist/intg-${INTG_NAME}"
           test -x "dist/intg-${INTG_NAME}/intg-${INTG_NAME}"
+          test -f "dist/intg-${INTG_NAME}/_internal/driver.json"
           test -f driver.json
           test -f config/config.json
           python3 - <<'PY'
           import json
           from pathlib import Path
-          data = json.loads(Path('driver.json').read_text(encoding='utf-8'))
+          source = json.loads(Path('driver.json').read_text(encoding='utf-8'))
+          bundled = json.loads(Path('dist/intg-homeassistantcustom/_internal/driver.json').read_text(encoding='utf-8'))
           required = {'driver_id', 'version', 'min_core_api', 'name', 'icon', 'description', 'developer', 'home_page'}
-          missing = required.difference(data)
+          missing = required.difference(source)
           if missing:
               raise SystemExit(f'Missing driver.json keys: {sorted(missing)}')
-          if data['driver_id'] != 'stehlampe-ha':
-              raise SystemExit(f"Unexpected driver_id: {data['driver_id']}")
-          if 'port' in data:
+          if source['driver_id'] != 'stehlampe-ha':
+              raise SystemExit(f"Unexpected driver_id: {source['driver_id']}")
+          if 'port' in source:
               raise SystemExit('driver.json must not contain a hard-coded port; the Remote runtime supplies UC_INTEGRATION_HTTP_PORT.')
-          if data['icon'] != 'uc:integration':
+          if source['icon'] != 'uc:integration':
               raise SystemExit('driver.json must use the known built-in icon uc:integration.')
-          print('driver.json OK:', data['driver_id'], data['version'])
+          if source != bundled:
+              raise SystemExit('Bundled driver.json does not match archive-root driver.json')
+          print('driver.json OK:', source['driver_id'], source['version'])
+          print('Bundled driver.json OK')
           print('config/config.json OK')
           PY
 
@@ -83,8 +88,20 @@ jobs:
           grep -Fxq './driver.json' archive.contents
           grep -Fxq './bin/driver' archive.contents
           grep -Fxq './config/config.json' archive.contents
+          ! grep -E '(^|/)([^/ ]+ )|\([0-9]+\)\.tar\.gz$' archive.contents
           rm -f archive.contents
           sha256sum "uc-intg-${INTG_NAME}-aarch64.tar.gz" > "uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256"
+
+      - name: Smoke-test packaged driver binary
+        shell: bash
+        run: |
+          timeout 8s "artifacts/bin/driver" >/tmp/driver-smoke.log 2>&1 || true
+          cat /tmp/driver-smoke.log
+          if grep -Eqi 'FileNotFoundError.*driver.json|No such file or directory.*driver.json|Traceback .*driver.py' /tmp/driver-smoke.log; then
+            echo 'Packaged driver failed to locate its bundled driver.json.'
+            exit 1
+          fi
+          grep -Eqi 'integration port|UC_INTEGRATION_HTTP_PORT|started|listening|driver' /tmp/driver-smoke.log
 
       - name: Upload install archive
         uses: actions/upload-artifact@v4
@@ -161,13 +178,13 @@ jobs:
             - **MODUS**
             - Physische Lautstärketasten: **VOL+ → HELLER**, **VOL− → DUNKLER**
             - Nutzt die vier vorhandenen Home-Assistant-Skripte für die Stehlampe
-            - Kein Zugriff auf Home Assistant während des Remote-Setups
 
             ## v${{ steps.version.outputs.version }} Änderungen
-            - Neuer eigenständiger Custom-Driver mit der eindeutigen `driver_id` `stehlampe-ha`.
-            - Verwendet die bereits funktionierenden HA-Skripte `script.ein_aus_stehlampe`, `script.heller_stehlampe`, `script.dunkler_stehlampe` und `script.modus_stehlampe`.
-            - Korrekte Verarbeitung des Remote-3-`send_cmd`-Wrappers für Simple Commands.
-            - Installationsarchiv wird vor dem Release strukturell geprüft.
+            - `driver.json` wird jetzt explizit in das PyInstaller-Runtime-Bundle aufgenommen.
+            - Der Driver verwendet im PyInstaller-Betrieb das gebündelte `driver.json` unter `_internal`.
+            - Build-Prüfung vergleicht das gebündelte und das Archiv-`driver.json` bytegenau inhaltlich.
+            - Installationsarchiv wird strukturell geprüft.
+            - Smoke-Test des gepackten ARM64-Drivers verhindert erneut einen Startfehler durch fehlendes `driver.json`.
 
             ## Installation
             Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist im Remote-3-Web-Configurator unter **Install custom** verwendbar.

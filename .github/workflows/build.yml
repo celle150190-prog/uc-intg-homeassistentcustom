@@ -44,7 +44,8 @@ jobs:
 
       - name: Validate build output
         run: |
-          test -x dist/intg-${INTG_NAME}/intg-${INTG_NAME}
+          test -d "dist/intg-${INTG_NAME}"
+          test -x "dist/intg-${INTG_NAME}/intg-${INTG_NAME}"
           test -f driver.json
           python3 - <<'PY'
           import json
@@ -58,13 +59,27 @@ jobs:
           PY
 
       - name: Prepare installation archive
+        shell: bash
         run: |
+          rm -rf artifacts
           mkdir -p artifacts/bin
+
+          # Unfolded Circle requires driver.json in the archive root and the
+          # PyInstaller one-folder bundle contents directly below ./bin.
+          # The executable itself must be named ./bin/driver.
+          cp -a "dist/intg-${INTG_NAME}/." artifacts/bin/
+          mv "artifacts/bin/intg-${INTG_NAME}" "artifacts/bin/driver"
           cp driver.json artifacts/driver.json
-          mv dist/intg-${INTG_NAME} artifacts/bin/driver
-          tar -czf uc-intg-${INTG_NAME}-aarch64.tar.gz -C artifacts .
-          tar -tzf uc-intg-${INTG_NAME}-aarch64.tar.gz
-          sha256sum uc-intg-${INTG_NAME}-aarch64.tar.gz > uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256
+
+          test -f artifacts/driver.json
+          test -x artifacts/bin/driver
+          test ! -d artifacts/bin/driver
+
+          tar -czf "uc-intg-${INTG_NAME}-aarch64.tar.gz" -C artifacts .
+          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz"
+          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" | grep -Eq '^\./driver\.json$'
+          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" | grep -Eq '^\./bin/driver$'
+          sha256sum "uc-intg-${INTG_NAME}-aarch64.tar.gz" > "uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256"
 
       - name: Upload install archive
         uses: actions/upload-artifact@v4
@@ -131,7 +146,14 @@ jobs:
           body: |
             # Stehlampe Integration v${{ steps.version.outputs.version }}
 
-            Erste Release-Version der eigenständigen Home-Assistant-Custom-Integration für die Unfolded Circle Remote 3.
+            Fehlerbereinigtes Release der eigenständigen Home-Assistant-Custom-Integration für die Unfolded Circle Remote 3.
+
+            ## Behobene Probleme
+            - Korrekte Struktur des TAR.GZ-Installationsarchivs
+            - `driver.json` liegt direkt im Archiv-Root
+            - Der PyInstaller-OneDir-Inhalt liegt direkt unter `./bin`
+            - Der ausführbare Treiber liegt als `./bin/driver` vor
+            - Die Archivstruktur wird vor der Veröffentlichung automatisch geprüft
 
             ## Funktionen
             - Eigenes Gerät **Stehlampe** auf der Geräte-Seite, ohne Aktivität
@@ -148,7 +170,7 @@ jobs:
             Die Integration sendet die Befehle `EIN/AUS`, `HELLER`, `DUNKLER` und `MODUS` an das Home-Assistant-Remote-Gerät `remote.broadlink` mit dem Zielgerät `Stehlampe`.
 
             ## Installation
-            Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist für die Installation als eigenständige Custom Integration auf der Unfolded Circle Remote 3 vorgesehen.
+            Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist direkt im Web-Configurator der Unfolded Circle Remote 3 unter **Install custom** verwendbar.
 
             Zusätzlich ist ein SHA-256-Prüfwert als separates Asset enthalten.
           files: |

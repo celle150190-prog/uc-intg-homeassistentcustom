@@ -1,23 +1,37 @@
 #!/usr/bin/env python3
-"""Standalone Home Assistant custom-command integration for Unfolded Circle."""
+"""Standalone Home Assistant command integration for Unfolded Circle Remote 3."""
+
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import aiohttp
 import ucapi
+from ucapi import remote
+from ucapi.remote import create_send_cmd
+from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_text
 
 _LOG = logging.getLogger("homeassistantcustom")
 
-CONFIG_FILE = os.path.join(os.getenv("UC_CONFIG_HOME", "."), "homeassistantcustom.json")
+DRIVER_CONFIG_DIR = Path(os.getenv("UC_CONFIG_HOME", "."))
+CONFIG_FILE = DRIVER_CONFIG_DIR / "homeassistantcustom.json"
+DRIVER_JSON = Path(__file__).with_name("driver.json")
+
 ENTITY_ID = "stehlampe"
 ENTITY_NAME = "Stehlampe"
-HA_DEFAULT_URL = "ws://homeassistant.local:8123/api/websocket"
+DEFAULT_HA_URL = "http://homeassistant.local:8123"
+DEFAULT_REMOTE_ENTITY = "remote.broadlink"
+DEFAULT_DEVICE = "Stehlampe"
+DEFAULT_DELAY = 0.4
 
-COMMANDS = {
+# Remote 3 command IDs. The UI labels are defined separately so EIN/AUS can be
+# displayed with the slash while keeping an identifier that is safe for command IDs.
+COMMANDS: dict[str, str] = {
     "EIN_AUS": "EIN/AUS",
     "HELLER": "HELLER",
     "DUNKLER": "DUNKLER",
@@ -25,86 +39,186 @@ COMMANDS = {
 }
 
 
+def _default_config() -> dict[str, Any]:
+    return {
+        "setup_complete": False,
+        "ha_url": DEFAULT_HA_URL,
+        "ha_token": "",
+        "ha_remote_entity": DEFAULT_REMOTE_ENTITY,
+        "device": DEFAULT_DEVICE,
+        "delay_secs": DEFAULT_DELAY,
+    }
+
+
 def load_config() -> dict[str, Any]:
+    config = _default_config()
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as fh:
-            return json.load(fh)
+        with CONFIG_FILE.open("r", encoding="utf-8") as fh:
+            stored = json.load(fh)
+        if isinstance(stored, dict):
+            config.update(stored)
     except FileNotFoundError:
-        return {
-            "ha_url": HA_DEFAULT_URL,
-            "ha_token": "",
-            "ha_remote_entity": "remote.broadlink",
-            "area_id": "wohnzimmer",
-            "device": "Stehlampe",
-            "delay_secs": 0.4,
-        }
+        pass
+    except (OSError, json.JSONDecodeError) as exc:
+        _LOG.warning("Could not read configuration: %s", exc)
+    return config
+
+
+def save_config(config: dict[str, Any]) -> None:
+    DRIVER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_file = CONFIG_FILE.with_suffix(".tmp")
+    with tmp_file.open("w", encoding="utf-8") as fh:
+        json.dump(config, fh, indent=2, ensure_ascii=False)
+    tmp_file.replace(CONFIG_FILE)
+
+
+def normalize_ha_ws_url(value: str) -> str:
+    """Convert a Home Assistant HTTP(S) base URL to its WebSocket API URL."""
+    url = value.strip().rstrip("/")
+    if url.startswith("ws://") or url.startswith("wss://"):
+        if url.endswith("/api/websocket"):
+            return url
+        return f"{url}/api/websocket"
+    if url.startswith("http://"):
+        return f"ws://{url[7:]}/api/websocket"
+    if url.startswith("https://"):
+        return f"wss://{url[8:]}/api/websocket"
+    return f"ws://{url}/api/websocket"
+
+
+def create_button_mappings() -> list[dict[str, Any]]:
+    """Map the physical Remote 3 volume keys to the lamp dimming commands."""
+    return [
+        # Short-press mappings are intentional: the Remote 3 handles the physical
+        # button interaction and can be further customized in its button mapping UI.
+        create_btn_mapping(Buttons.VOLUME_UP, "HELLER"),
+        create_btn_mapping(Buttons.VOLUME_DOWN, "DUNKLER"),
+    ]
+
+
+def create_ui_pages() -> list[UiPage]:
+    """Create a dedicated four-button page shown when Stehlampe is opened."""
+    page = UiPage("stehlampe", "Stehlampe", grid=Size(4, 6))
+    page.add(create_ui_text("EIN/AUS", 0, 0, size=Size(4, 1), cmd="EIN_AUS"))
+    page.add(create_ui_text("HELLER", 0, 2, size=Size(2, 1), cmd="HELLER"))
+    page.add(create_ui_text("DUNKLER", 2, 2, size=Size(2, 1), cmd="DUNKLER"))
+    page.add(create_ui_text("MODUS", 0, 4, size=Size(4, 1), cmd="MODUS"))
+    return [page]
 
 
 class HomeAssistantClient:
-    """Small Home Assistant WebSocket API client."""
+    """Minimal authenticated Home Assistant WebSocket API client."""
 
-    def __init__(self, cfg: dict[str, Any]) -> None:
-        self.cfg = cfg
-        self.ws: aiohttp.ClientWebSocketResponse | None = None
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.config = config
         self.session: aiohttp.ClientSession | None = None
-        self.msg_id = 0
+        self.ws: aiohttp.ClientWebSocketResponse | None = None
+        self.message_id = 0
         self.authenticated = False
+        self.lock = asyncio.Lock()
 
-    async def connect(self) -> None:
+    async def _connect_locked(self) -> None:
         if self.ws and not self.ws.closed and self.authenticated:
             return
 
+        await self._close_locked()
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
-        self.ws = await self.session.ws_connect(self.cfg.get("ha_url", HA_DEFAULT_URL))
+
+        ws_url = normalize_ha_ws_url(str(self.config.get("ha_url", DEFAULT_HA_URL)))
+        self.ws = await self.session.ws_connect(ws_url, heartbeat=30)
 
         hello = await self.ws.receive_json()
         if hello.get("type") != "auth_required":
-            raise RuntimeError(f"Unexpected Home Assistant websocket response: {hello}")
+            raise RuntimeError("Home Assistant did not request WebSocket authentication")
 
-        await self.ws.send_json({
-            "type": "auth",
-            "access_token": self.cfg.get("ha_token", ""),
-        })
+        token = str(self.config.get("ha_token", "")).strip()
+        if not token:
+            raise RuntimeError("Home Assistant access token is not configured")
+
+        await self.ws.send_json({"type": "auth", "access_token": token})
         auth = await self.ws.receive_json()
         if auth.get("type") != "auth_ok":
-            raise RuntimeError(f"Home Assistant authentication failed: {auth}")
+            raise RuntimeError("Home Assistant authentication failed; check URL and token")
+
         self.authenticated = True
 
-    async def call_service(self, command: str) -> None:
-        await self.connect()
-        self.msg_id += 1
-        payload = {
-            "id": self.msg_id,
-            "type": "call_service",
-            "domain": "remote",
-            "service": "send_command",
-            "target": {
-                "entity_id": self.cfg.get("ha_remote_entity", "remote.broadlink"),
-            },
-            "service_data": {
-                "delay_secs": float(self.cfg.get("delay_secs", 0.4)),
-                "hold_secs": 0,
-                "device": self.cfg.get("device", "Stehlampe"),
-                "command": command,
-            },
-        }
-        await self.ws.send_json(payload)
-
-        while True:
-            response = await self.ws.receive_json()
-            if response.get("id") != self.msg_id:
-                continue
-            if response.get("success") is False:
-                raise RuntimeError(str(response))
-            return
-
-    async def close(self) -> None:
+    async def _close_locked(self) -> None:
         self.authenticated = False
         if self.ws and not self.ws.closed:
             await self.ws.close()
-        if self.session and not self.session.closed:
-            await self.session.close()
+        self.ws = None
+
+    async def _call_locked(self, payload: dict[str, Any]) -> dict[str, Any]:
+        await self._connect_locked()
+        assert self.ws is not None
+
+        self.message_id += 1
+        request_id = self.message_id
+        request = dict(payload)
+        request["id"] = request_id
+        await self.ws.send_json(request)
+
+        while True:
+            response = await self.ws.receive_json()
+            if response.get("id") != request_id:
+                continue
+            if response.get("success") is False:
+                error = response.get("error", {})
+                raise RuntimeError(str(error)[:400])
+            return response
+
+    async def get_states(self) -> list[dict[str, Any]]:
+        async with self.lock:
+            try:
+                response = await self._call_locked({"type": "get_states"})
+            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, RuntimeError):
+                await self._close_locked()
+                raise
+            result = response.get("result", [])
+            if not isinstance(result, list):
+                raise RuntimeError("Unexpected Home Assistant get_states response")
+            return result
+
+    async def test_connection(self) -> None:
+        """Authenticate and verify that the configured remote entity exists."""
+        states = await self.get_states()
+        expected = str(self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY))
+        if not any(state.get("entity_id") == expected for state in states):
+            raise RuntimeError(f"Home Assistant entity '{expected}' was not found")
+
+    async def send_remote_command(self, command: str) -> None:
+        """Call Home Assistant's remote.send_command service."""
+        async with self.lock:
+            try:
+                await self._call_locked(
+                    {
+                        "type": "call_service",
+                        "domain": "remote",
+                        "service": "send_command",
+                        "target": {
+                            "entity_id": str(
+                                self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY)
+                            )
+                        },
+                        "service_data": {
+                            "delay_secs": float(self.config.get("delay_secs", DEFAULT_DELAY)),
+                            "hold_secs": 0,
+                            "device": str(self.config.get("device", DEFAULT_DEVICE)),
+                            "command": command,
+                        },
+                    }
+                )
+            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, RuntimeError):
+                await self._close_locked()
+                raise
+
+    async def close(self) -> None:
+        async with self.lock:
+            await self._close_locked()
+            if self.session and not self.session.closed:
+                await self.session.close()
+            self.session = None
 
 
 CONFIG = load_config()
@@ -113,81 +227,131 @@ LOOP = asyncio.new_event_loop()
 API = ucapi.IntegrationAPI(LOOP)
 
 
-def command_handler_factory():
-    async def handler(entity: ucapi.Remote, cmd_id: str, params: dict[str, Any] | None) -> ucapi.StatusCodes:
-        del entity, params
-
-        command = COMMANDS.get(cmd_id)
-        if command is None:
-            _LOG.error("Unknown command: %s", cmd_id)
-            return ucapi.StatusCodes.NOT_IMPLEMENTED
-
-        try:
-            await HA.call_service(command)
-            _LOG.info("Sent %s to Home Assistant", command)
-            return ucapi.StatusCodes.OK
-        except Exception:
-            _LOG.exception("Failed to send %s to Home Assistant", command)
-            return ucapi.StatusCodes.SERVICE_UNAVAILABLE
-
-    return handler
-
-
-@API.listens_to(ucapi.Events.CONNECT)
-async def on_connect(_websocket) -> None:
-    _LOG.info("Remote connected")
-    await API.set_device_state(ucapi.DeviceStates.CONNECTED)
-
-
-@API.listens_to(ucapi.Events.DISCONNECT)
-async def on_disconnect() -> None:
-    _LOG.info("Remote disconnected")
-    await API.set_device_state(ucapi.DeviceStates.DISCONNECTED)
-
-
-@API.listens_to(ucapi.Events.CLIENT_CONNECTED)
-async def on_client_connected() -> None:
-    _LOG.debug("Remote websocket client connected")
-
-
-@API.listens_to(ucapi.Events.CLIENT_DISCONNECTED)
-async def on_client_disconnected() -> None:
-    _LOG.debug("Remote websocket client disconnected")
-
-
-async def main() -> None:
-    logging.basicConfig(
-        level=os.getenv("UC_LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
-
-    definition = ucapi.Remote(
+def add_stehlampe_entity() -> None:
+    """Publish the single Stehlampe remote entity."""
+    API.available_entities.clear()
+    entity = ucapi.Remote(
         identifier=ENTITY_ID,
         name={"en": ENTITY_NAME, "de": ENTITY_NAME},
         features=[],
         attributes={},
         simple_commands=list(COMMANDS.keys()),
-        cmd_handler=command_handler_factory(),
+        button_mapping=create_button_mappings(),
+        ui_pages=create_ui_pages(),
+        cmd_handler=command_handler,
         icon="uc:lightbulb",
         description={
-            "en": "Custom Home Assistant control for the floor lamp",
-            "de": "Eigene Home-Assistant-Steuerung für die Stehlampe",
+            "en": "Standalone Home Assistant control for the floor lamp",
+            "de": "Eigenständige Home-Assistant-Steuerung für die Stehlampe",
         },
     )
-    API.available_entities.add(definition)
+    API.available_entities.add(entity)
 
-    _LOG.info("Home Assistant Custom integration started")
-    await API.init()
+
+async def command_handler(
+    entity: ucapi.Remote,
+    cmd_id: str,
+    _params: dict[str, Any] | None,
+    _websocket: Any,
+) -> ucapi.StatusCodes:
+    """Handle Remote 3 entity commands."""
+    del entity
+    command = COMMANDS.get(cmd_id)
+    if command is None:
+        _LOG.error("Unsupported command '%s'", cmd_id)
+        return ucapi.StatusCodes.BAD_REQUEST
 
     try:
-        await LOOP.run_in_executor(None, lambda: None)
-    except KeyboardInterrupt:
-        pass
+        await HA.send_remote_command(command)
+        _LOG.info("Sent Stehlampe command '%s'", command)
+        return ucapi.StatusCodes.OK
+    except Exception as exc:
+        _LOG.error("Failed to send '%s' to Home Assistant: %s", command, exc)
+        return ucapi.StatusCodes.SERVICE_UNAVAILABLE
+
+
+async def driver_setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
+    """Handle initial and reconfiguration setup requests."""
+    if isinstance(msg, ucapi.DriverSetupRequest):
+        setup_data = {str(key): str(value) for key, value in msg.setup_data.items()}
+        ha_url = setup_data.get("ha_url", DEFAULT_HA_URL).strip()
+        ha_token = setup_data.get("ha_token", "").strip()
+        remote_entity = setup_data.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY).strip()
+        device = setup_data.get("device", DEFAULT_DEVICE).strip()
+        delay_text = setup_data.get("delay_secs", str(DEFAULT_DELAY)).strip()
+
+        if not ha_url:
+            return ucapi.SetupError()
+        if not ha_token:
+            return ucapi.SetupError()
+        if not remote_entity:
+            remote_entity = DEFAULT_REMOTE_ENTITY
+        if not device:
+            device = DEFAULT_DEVICE
+
+        try:
+            delay_secs = float(delay_text)
+            if delay_secs < 0 or delay_secs > 10:
+                raise ValueError
+        except ValueError:
+            return ucapi.SetupError()
+
+        new_config = {
+            "setup_complete": True,
+            "ha_url": ha_url,
+            "ha_token": ha_token,
+            "ha_remote_entity": remote_entity,
+            "device": device,
+            "delay_secs": delay_secs,
+        }
+
+        test_client = HomeAssistantClient(new_config)
+        try:
+            await test_client.test_connection()
+        except Exception as exc:
+            _LOG.error("Home Assistant setup test failed: %s", exc)
+            await test_client.close()
+            return ucapi.SetupError()
+        finally:
+            await test_client.close()
+
+        CONFIG.clear()
+        CONFIG.update(new_config)
+        save_config(CONFIG)
+        HA.config = CONFIG
+        add_stehlampe_entity()
+        _LOG.info("Home Assistant setup completed")
+        return ucapi.SetupComplete()
+
+    return ucapi.SetupError()
+
+
+@API.listens_to(ucapi.Events.CONNECT)
+async def on_connect() -> None:
+    """Report the driver as connected to the Remote 3."""
+    await API.set_device_state(ucapi.DeviceStates.CONNECTED)
+
+
+@API.listens_to(ucapi.Events.DISCONNECT)
+async def on_disconnect() -> None:
+    """Report the driver as disconnected and close the HA connection."""
+    await HA.close()
+    await API.set_device_state(ucapi.DeviceStates.DISCONNECTED)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=os.getenv("UC_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+    if CONFIG.get("setup_complete") and CONFIG.get("ha_token"):
+        add_stehlampe_entity()
+    else:
+        API.available_entities.clear()
+
+    LOOP.run_until_complete(API.init(str(DRIVER_JSON), driver_setup_handler))
     try:
-        LOOP.run_until_complete(main())
         LOOP.run_forever()
     finally:
         LOOP.run_until_complete(HA.close())

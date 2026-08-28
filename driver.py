@@ -14,7 +14,7 @@ from typing import Any
 import aiohttp
 import ucapi
 from ucapi import remote as uc_remote
-from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_text
+from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_icon
 
 _LOG = logging.getLogger("stehlampe-ha")
 
@@ -90,12 +90,16 @@ def create_button_mappings() -> list[dict[str, Any]]:
 
 
 def create_ui_pages() -> list[UiPage]:
-    """Four direct controls shown on the Stehlampe device page."""
+    """Four large, command-linked icon buttons shown on the Stehlampe page."""
     page = UiPage("stehlampe", "Stehlampe", grid=Size(4, 6))
-    page.add(create_ui_text("EIN/AUS", 0, 0, size=Size(4, 1), cmd="EIN_AUS"))
-    page.add(create_ui_text("HELLER", 0, 2, size=Size(2, 1), cmd="HELLER"))
-    page.add(create_ui_text("DUNKLER", 2, 2, size=Size(2, 1), cmd="DUNKLER"))
-    page.add(create_ui_text("MODUS", 0, 4, size=Size(4, 1), cmd="MODUS"))
+
+    # Four 2x2 command tiles fill the available page and remain easy to hit.
+    # Power = on/off, sun = brighter, moon = darker, palette = mode.
+    page.add(create_ui_icon("uc:power-off", 0, 0, size=Size(2, 2), cmd="EIN_AUS"))
+    page.add(create_ui_icon("uc:sun", 2, 0, size=Size(2, 2), cmd="HELLER"))
+    page.add(create_ui_icon("uc:moon", 0, 2, size=Size(2, 2), cmd="DUNKLER"))
+    page.add(create_ui_icon("uc:palette", 2, 2, size=Size(2, 2), cmd="MODUS"))
+
     return [page]
 
 

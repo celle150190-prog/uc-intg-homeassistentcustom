@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,12 @@ _LOG = logging.getLogger("stehlampe-ha")
 
 DRIVER_CONFIG_DIR = Path(os.getenv("UC_CONFIG_HOME") or os.getenv("HOME") or "./")
 CONFIG_FILE = DRIVER_CONFIG_DIR / "stehlampe-ha.json"
-DRIVER_JSON = Path(__file__).with_name("driver.json")
+
+# PyInstaller stores bundled data below sys._MEIPASS (on the Remote this is
+# typically /app/_internal). During normal source execution there is no
+# _MEIPASS, so the repository-local driver.json is used instead.
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+DRIVER_JSON = BUNDLE_DIR / "driver.json"
 
 ENTITY_ID = "stehlampe"
 ENTITY_NAME = "Stehlampe"

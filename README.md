@@ -1,37 +1,34 @@
 # Home Assistant Custom Commands – Unfolded Circle Remote 3
 
-Standalone custom integration driver for the Unfolded Circle Remote 3.
+Standalone custom integration for the Unfolded Circle Remote 3. This project is intentionally independent from the built-in Home Assistant integration.
 
-The integration exposes one Remote entity named **Stehlampe** with four simple commands:
+## What it provides
 
-- EIN/AUS
-- HELLER
-- DUNKLER
-- MODUS
+The driver exposes exactly one Remote entity:
 
-The commands are forwarded to Home Assistant using the `remote.send_command` service on `remote.broadlink`, matching the user's existing Home Assistant setup.
+```text
+Geräte
+└── Stehlampe
+    ├── EIN/AUS
+    ├── HELLER
+    ├── DUNKLER
+    └── MODUS
+```
 
-The Remote 3 physical volume buttons are intended to be mapped as:
+The entity also publishes its own UI page with those four controls. No activity is required.
 
-- Volume Up → HELLER
-- Volume Down → DUNKLER
+The physical Remote 3 volume keys are mapped to:
 
-This project is intentionally a standalone custom integration and is **not** an upgrade/update package for the built-in Home Assistant integration.
+```text
+VOL+ → HELLER
+VOL− → DUNKLER
+```
 
-## Requirements
+The implementation uses the official Unfolded Circle Integration API and its Remote entity support for simple commands, physical button mappings and UI pages.
 
-- Unfolded Circle Remote 3
-- Home Assistant reachable from the Remote 3
-- Python 3.11+ when running externally
-- `ucapi` 0.7.0
+## Home Assistant side
 
-## Home Assistant
-
-The driver targets the existing Home Assistant remote entity:
-
-`remote.broadlink`
-
-Each command is sent as:
+The driver calls Home Assistant directly through the WebSocket API and invokes:
 
 ```yaml
 action: remote.send_command
@@ -40,12 +37,50 @@ target:
 data:
   delay_secs: 0.4
   hold_secs: 0
-  device: Stehlampe
-  command: <COMMAND>
+device: Stehlampe
+command: <COMMAND>
 ```
 
-where `<COMMAND>` is one of `EIN/AUS`, `HELLER`, `DUNKLER`, or `MODUS`.
+In the actual WebSocket request, `device` and `command` are sent as service data. The four Home Assistant commands are:
 
-## Installation
+- `EIN/AUS`
+- `HELLER`
+- `DUNKLER`
+- `MODUS`
 
-Build/run the integration as a normal Unfolded Circle custom integration driver. The driver metadata is in `driver.json`.
+The previous four Home Assistant scripts are therefore no longer required once this integration is working.
+
+## Setup
+
+During integration setup on the Remote 3 / web configurator, enter:
+
+- Home Assistant URL, for example `http://homeassistant.local:8123`
+- Home Assistant Long-Lived Access Token
+- Home Assistant remote entity, default `remote.broadlink`
+- Remote device name, default `Stehlampe`
+- Command delay, default `0.4` seconds
+
+The driver authenticates with Home Assistant and verifies that the configured remote entity exists before completing setup.
+
+The access token is **not** stored in the GitHub repository. It is stored only in the integration's runtime configuration on the Remote.
+
+## Build
+
+The GitHub Actions workflow builds an ARM64/aarch64 installation archive with the official Unfolded Circle PyInstaller image.
+
+After pushing to `main` or starting the workflow manually:
+
+1. Open the repository's **Actions** tab.
+2. Select **Build Remote 3 Integration**.
+3. Download the artifact `uc-intg-homeassistantcustom-aarch64`.
+4. Use the contained `uc-intg-homeassistantcustom-aarch64.tar.gz` in the Remote 3 custom-integration installer.
+
+The archive has the expected custom-integration structure with `driver.json` at the root and the compiled driver below `bin/driver`.
+
+## Development
+
+Runtime dependencies are kept in `requirements.txt`. The repository does not contain a device-specific Home Assistant token or other secret configuration.
+
+## License
+
+This project is provided as-is for use with the author's Remote 3 setup.

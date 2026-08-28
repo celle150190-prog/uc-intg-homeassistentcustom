@@ -76,9 +76,11 @@ jobs:
           test ! -d artifacts/bin/driver
 
           tar -czf "uc-intg-${INTG_NAME}-aarch64.tar.gz" -C artifacts .
-          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz"
-          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" | grep -Eq '^\./driver\.json$'
-          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" | grep -Eq '^\./bin/driver$'
+          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" > archive.contents
+          cat archive.contents
+          grep -Fxq './driver.json' archive.contents
+          grep -Fxq './bin/driver' archive.contents
+          rm -f archive.contents
           sha256sum "uc-intg-${INTG_NAME}-aarch64.tar.gz" > "uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256"
 
       - name: Upload install archive

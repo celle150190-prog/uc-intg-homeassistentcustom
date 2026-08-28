@@ -1,0 +1,21 @@
+{
+  "driver_id": "homeassistantcustom",
+  "version": "1.0.0",
+  "release_date": "2026-08-28",
+  "min_core_api": "0.24.3",
+  "name": {
+    "en": "Home Assistant Custom Commands",
+    "de": "Home Assistant eigene Befehle"
+  },
+  "icon": "uc:home-assistant",
+  "description": {
+    "en": "Custom command integration for Home Assistant devices",
+    "de": "Eigene Befehlsintegration für Home-Assistant-Geräte"
+  },
+  "port": 9090,
+  "developer": {
+    "name": "Marci",
+    "url": "https://github.com/celle150190-prog/uc-intg-homeassistentcustom"
+  },
+  "home_page": "https://github.com/celle150190-prog/uc-intg-homeassistentcustom"
+}

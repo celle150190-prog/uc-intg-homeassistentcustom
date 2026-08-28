@@ -51,13 +51,13 @@ jobs:
           import json
           from pathlib import Path
           data = json.loads(Path('driver.json').read_text(encoding='utf-8'))
-          required = {'driver_id', 'version', 'name', 'description'}
+          required = {'driver_id', 'version', 'name', 'description', 'port'}
           missing = required.difference(data)
           if missing:
               raise SystemExit(f'Missing driver.json keys: {sorted(missing)}')
-          if 'port' in data:
-              raise SystemExit('Custom driver metadata must not hard-code a port; the Remote runtime supplies UC_INTEGRATION_HTTP_PORT.')
-          print('driver.json OK:', data['driver_id'], data['version'])
+          if not isinstance(data['port'], int) or not (1 <= data['port'] <= 65535):
+              raise SystemExit('driver.json port must be an integer between 1 and 65535')
+          print('driver.json OK:', data['driver_id'], data['version'], 'port', data['port'])
           PY
 
       - name: Prepare installation archive
@@ -162,13 +162,17 @@ jobs:
             - Home Assistant REST API: `remote.send_command`
             - Standard: `remote.broadlink` + Gerät `Stehlampe`
 
-            ## v1.0.5 Änderungen
-            - Kein hart codierter Integrations-Port mehr in `driver.json`
-            - Verwendung des von der Remote bereitgestellten `UC_INTEGRATION_HTTP_PORT`
-            - Fallback auf Port 19123 nur für Umgebungen, in denen der Runtime-Port nicht gesetzt ist
-            - Home Assistant wird beim Einrichten nicht mehr kontaktiert; dadurch kann der Driver auch bei vorübergehend nicht erreichbarem Home Assistant fertig eingerichtet werden
-            - Die Home-Assistant-Verbindung wird erst beim Ausführen eines Lampenbefehls hergestellt
-            - Archivstruktur wird weiterhin automatisch auf `driver.json` im Root und `./bin/driver` geprüft
+            ## Setup und Netzwerk
+            - Home Assistant wird beim Einrichten nicht kontaktiert.
+            - Die Verbindung zu Home Assistant wird erst beim ersten Lampenbefehl aufgebaut.
+            - Das `port`-Metadatenfeld bleibt für die Remote-Installation erhalten.
+            - `UC_INTEGRATION_HTTP_PORT` kann den Port zur Laufzeit überschreiben.
+            - Fallback bei manuellem Start ohne Runtime-Variable: Port 19123.
+
+            ## v${{ steps.version.outputs.version }} Änderungen
+            - Repariert die Archiv-Metadaten für den Remote-3-Web-Configurator durch Wiederherstellung des `port`-Feldes.
+            - Der Build prüft nun explizit, dass `port` in `driver.json` vorhanden und gültig ist.
+            - Archivstruktur wird weiterhin automatisch auf `driver.json` im Root und `./bin/driver` geprüft.
 
             ## Installation
             Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist im Remote-3-Web-Configurator unter **Install custom** verwendbar.

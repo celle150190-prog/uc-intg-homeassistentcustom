@@ -75,3 +75,82 @@ jobs:
             uc-intg-${{ env.INTG_NAME }}-aarch64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    name: Create GitHub release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read driver version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(python3 - <<'PY'
+          import json
+          print(json.load(open('driver.json', encoding='utf-8'))['version'])
+          PY
+          )
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether release already exists
+        id: release_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download build artifacts
+        if: steps.release_check.outputs.exists != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: uc-intg-${{ env.INTG_NAME }}-aarch64
+          path: release-assets
+
+      - name: Create GitHub release
+        if: steps.release_check.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Stehlampe Integration v${{ steps.version.outputs.version }}
+          prerelease: false
+          generate_release_notes: false
+          body: |
+            # Stehlampe Integration v${{ steps.version.outputs.version }}
+
+            Erste Release-Version der eigenständigen Home-Assistant-Custom-Integration für die Unfolded Circle Remote 3.
+
+            ## Funktionen
+            - Eigenes Gerät **Stehlampe** auf der Geräte-Seite, ohne Aktivität
+            - **EIN/AUS**
+            - **HELLER**
+            - **DUNKLER**
+            - **MODUS**
+            - Physische Lautstärketasten: **VOL+ → HELLER**, **VOL− → DUNKLER**
+            - Direkte Ansteuerung von Home Assistant über `remote.send_command`
+            - Standardmäßig `remote.broadlink` und Gerät `Stehlampe`
+            - Konfigurierbare Home-Assistant-URL, Long-Lived Access Token, Remote-Entity, Gerätename und Befehlsverzögerung
+
+            ## Home Assistant
+            Die Integration sendet die Befehle `EIN/AUS`, `HELLER`, `DUNKLER` und `MODUS` an das Home-Assistant-Remote-Gerät `remote.broadlink` mit dem Zielgerät `Stehlampe`.
+
+            ## Installation
+            Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist für die Installation als eigenständige Custom Integration auf der Unfolded Circle Remote 3 vorgesehen.
+
+            Zusätzlich ist ein SHA-256-Prüfwert als separates Asset enthalten.
+          files: |
+            release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz
+            release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz.sha256

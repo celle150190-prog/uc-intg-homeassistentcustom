@@ -28,7 +28,7 @@ The implementation uses the official Unfolded Circle Integration API and its Rem
 
 ## Home Assistant side
 
-The driver calls Home Assistant directly through the WebSocket API and invokes:
+The driver calls Home Assistant directly through the WebSocket API and invokes the `remote.send_command` service with the same values as the existing scripts:
 
 ```yaml
 action: remote.send_command
@@ -37,11 +37,11 @@ target:
 data:
   delay_secs: 0.4
   hold_secs: 0
-device: Stehlampe
-command: <COMMAND>
+  device: Stehlampe
+  command: <COMMAND>
 ```
 
-In the actual WebSocket request, `device` and `command` are sent as service data. The four Home Assistant commands are:
+The four Home Assistant commands are:
 
 - `EIN/AUS`
 - `HELLER`

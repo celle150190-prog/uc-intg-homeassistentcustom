@@ -66,7 +66,9 @@ The access token is not stored in the GitHub repository. It is stored only in th
 
 ## Network and driver port
 
-The Remote 3 custom-integration runtime supplies the Integration API port through `UC_INTEGRATION_HTTP_PORT`. The metadata therefore does not hard-code a port. For local/manual execution only, the driver uses port `19123` as a fallback when the runtime variable is not present.
+The `driver.json` metadata keeps a valid `port` field because the Remote 3 custom-integration installer expects the port metadata to be present in the archive. The driver also honors `UC_INTEGRATION_HTTP_PORT`, which can override the metadata port when the Remote runtime provides it.
+
+For local/manual execution without `UC_INTEGRATION_HTTP_PORT`, the driver falls back to port `19123`.
 
 ## Build
 
@@ -79,7 +81,7 @@ After pushing to `main` or starting the workflow manually:
 3. Download the artifact `uc-intg-homeassistantcustom-aarch64`.
 4. Use the contained `uc-intg-homeassistantcustom-aarch64.tar.gz` in the Remote 3 custom-integration installer.
 
-The archive is validated to contain `driver.json` at the root and the compiled executable at `./bin/driver`.
+The archive is validated to contain `driver.json` at the root and the compiled executable at `./bin/driver`. The workflow also checks that the required `port` metadata is present and valid.
 
 ## Development
 

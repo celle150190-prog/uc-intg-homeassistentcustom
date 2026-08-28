@@ -1,0 +1,77 @@
+name: Build Remote 3 Integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  INTG_NAME: homeassistantcustom
+  PYTHON_VER: 3.11.13-0.7.0
+
+jobs:
+  build:
+    name: Build aarch64 integration
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build with Unfolded Circle PyInstaller image
+        run: |
+          rm -rf dist artifacts
+          docker run --rm \
+            --platform=linux/arm64/v8 \
+            --user=$(id -u):$(id -g) \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            docker.io/unfoldedcircle/r2-pyinstaller:${PYTHON_VER} \
+            bash -c \
+            "cd /workspace && \
+             python -m pip install -r requirements.txt && \
+             pyinstaller --clean --onedir --name intg-${INTG_NAME} driver.py"
+
+      - name: Validate build output
+        run: |
+          test -x dist/intg-${INTG_NAME}/driver
+          test -f driver.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('driver.json').read_text(encoding='utf-8'))
+          required = {'driver_id', 'version', 'name', 'description', 'port'}
+          missing = required.difference(data)
+          if missing:
+              raise SystemExit(f'Missing driver.json keys: {sorted(missing)}')
+          print('driver.json OK:', data['driver_id'], data['version'])
+          PY
+
+      - name: Prepare installation archive
+        run: |
+          mkdir -p artifacts/bin
+          cp driver.json artifacts/driver.json
+          mv dist/intg-${INTG_NAME} artifacts/bin/driver
+          tar -czf uc-intg-${INTG_NAME}-aarch64.tar.gz -C artifacts .
+          tar -tzf uc-intg-${INTG_NAME}-aarch64.tar.gz
+          sha256sum uc-intg-${INTG_NAME}-aarch64.tar.gz > uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256
+
+      - name: Upload install archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: uc-intg-${{ env.INTG_NAME }}-aarch64
+          path: |
+            uc-intg-${{ env.INTG_NAME }}-aarch64.tar.gz
+            uc-intg-${{ env.INTG_NAME }}-aarch64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30

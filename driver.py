@@ -90,15 +90,15 @@ def create_button_mappings() -> list[dict[str, Any]]:
 
 
 def create_ui_pages() -> list[UiPage]:
-    """Four large, command-linked icon buttons shown on the Stehlampe page."""
+    """Four vertically stacked, command-linked icon buttons for the Stehlampe page."""
     page = UiPage("stehlampe", "Stehlampe", grid=Size(4, 6))
 
-    # Four 2x2 command tiles fill the available page and remain easy to hit.
-    # Power = on/off, sun = brighter, moon = darker, palette = mode.
-    page.add(create_ui_icon("uc:power-off", 0, 0, size=Size(2, 2), cmd="EIN_AUS"))
-    page.add(create_ui_icon("uc:sun", 2, 0, size=Size(2, 2), cmd="HELLER"))
-    page.add(create_ui_icon("uc:moon", 0, 2, size=Size(2, 2), cmd="DUNKLER"))
-    page.add(create_ui_icon("uc:palette", 2, 2, size=Size(2, 2), cmd="MODUS"))
+    # One full-width button per row for a clean, easy-to-use vertical layout.
+    # The brightness controls use semantically explicit sun-bright / brightness-low icons.
+    page.add(create_ui_icon("uc:power-off", 0, 0, size=Size(4, 1), cmd="EIN_AUS"))
+    page.add(create_ui_icon("uc:sun-bright", 0, 1, size=Size(4, 1), cmd="HELLER"))
+    page.add(create_ui_icon("uc:brightness-low", 0, 2, size=Size(4, 1), cmd="DUNKLER"))
+    page.add(create_ui_icon("uc:palette", 0, 3, size=Size(4, 1), cmd="MODUS"))
 
     return [page]
 

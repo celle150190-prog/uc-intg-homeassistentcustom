@@ -1,6 +1,6 @@
 {
   "driver_id": "homeassistantcustom",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "release_date": "2026-08-28",
   "min_core_api": "0.20.0",
   "name": {

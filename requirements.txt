@@ -1,2 +1,2 @@
 ucapi==0.7.0
-requests==2.34.2
+aiohttp>=3.12,<4.0

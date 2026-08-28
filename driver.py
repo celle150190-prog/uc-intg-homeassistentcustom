@@ -9,11 +9,9 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 import aiohttp
 import ucapi
-from ucapi import remote
 from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_text
 
 _LOG = logging.getLogger("homeassistantcustom")
@@ -76,7 +74,7 @@ def normalize_ha_http_url(value: str) -> str:
     if url.startswith("ws://"):
         url = f"http://{url[5:]}"
     elif url.startswith("wss://"):
-        url = f"https://{url[6:]}"
+        url = f"https://{url[6:] }"
     elif not url.startswith(("http://", "https://")):
         url = f"http://{url}"
     return url.rstrip("/")
@@ -91,7 +89,7 @@ def create_button_mappings() -> list[dict[str, Any]]:
 
 
 def create_ui_pages() -> list[UiPage]:
-    """Create a dedicated four-button page shown when Stehlampe is opened."""
+    """Create the Stehlampe UI page with the four commands."""
     page = UiPage("stehlampe", "Stehlampe", grid=Size(4, 6))
     page.add(create_ui_text("EIN/AUS", 0, 0, size=Size(4, 1), cmd="EIN_AUS"))
     page.add(create_ui_text("HELLER", 0, 2, size=Size(2, 1), cmd="HELLER"))
@@ -124,41 +122,10 @@ class HomeAssistantClient:
         }
 
     def _base_url(self) -> str:
-        value = str(self.config.get("ha_url", DEFAULT_HA_URL))
-        return normalize_ha_http_url(value)
-
-    async def test_connection(self) -> None:
-        """Verify HTTP connectivity, authentication and the configured remote entity."""
-        async with self.lock:
-            session = await self._ensure_session()
-            entity_id = str(
-                self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY)
-            ).strip()
-            if not entity_id:
-                raise RuntimeError("Home Assistant remote entity is not configured")
-
-            url = f"{self._base_url()}/api/states/{quote(entity_id, safe='')}"
-            _LOG.info("Testing Home Assistant connection: %s", url)
-            try:
-                async with session.get(url, headers=self._headers()) as response:
-                    body = await response.text()
-            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                raise RuntimeError(f"Could not connect to Home Assistant: {exc}") from exc
-
-            if response.status == 200:
-                return
-            if response.status == 401:
-                raise RuntimeError("Home Assistant access token is invalid")
-            if response.status == 404:
-                raise RuntimeError(f"Home Assistant entity '{entity_id}' was not found")
-            detail = body.strip().replace("\n", " ")[:400]
-            raise RuntimeError(
-                f"Home Assistant returned HTTP {response.status}"
-                + (f": {detail}" if detail else "")
-            )
+        return normalize_ha_http_url(str(self.config.get("ha_url", DEFAULT_HA_URL)))
 
     async def send_remote_command(self, command: str) -> None:
-        """Call Home Assistant's remote.send_command service via REST."""
+        """Invoke Home Assistant's remote.send_command service."""
         async with self.lock:
             session = await self._ensure_session()
             url = f"{self._base_url()}/api/services/remote/send_command"
@@ -173,9 +140,7 @@ class HomeAssistantClient:
             }
             _LOG.info("Sending Home Assistant command '%s' via %s", command, url)
             try:
-                async with session.post(
-                    url, headers=self._headers(), json=payload
-                ) as response:
+                async with session.post(url, headers=self._headers(), json=payload) as response:
                     body = await response.text()
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 raise RuntimeError(f"Could not connect to Home Assistant: {exc}") from exc
@@ -184,6 +149,8 @@ class HomeAssistantClient:
                 return
             if response.status == 401:
                 raise RuntimeError("Home Assistant access token is invalid")
+            if response.status == 404:
+                raise RuntimeError("Home Assistant remote entity or command endpoint was not found")
             detail = body.strip().replace("\n", " ")[:400]
             raise RuntimeError(
                 f"Home Assistant returned HTTP {response.status}"
@@ -204,7 +171,7 @@ API = ucapi.IntegrationAPI(LOOP)
 
 
 def add_stehlampe_entity() -> None:
-    """Publish the single Stehlampe remote entity."""
+    """Publish the single Stehlampe Remote entity."""
     API.available_entities.clear()
     entity = ucapi.Remote(
         identifier=ENTITY_ID,
@@ -239,7 +206,6 @@ async def command_handler(
 
     try:
         await HA.send_remote_command(command)
-        _LOG.info("Sent Stehlampe command '%s'", command)
         return ucapi.StatusCodes.OK
     except Exception as exc:
         _LOG.error("Failed to send '%s' to Home Assistant: %s", command, exc)
@@ -247,69 +213,63 @@ async def command_handler(
 
 
 async def driver_setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
-    """Handle initial and reconfiguration setup requests."""
-    if isinstance(msg, ucapi.DriverSetupRequest):
-        setup_data = {str(key): str(value) for key, value in msg.setup_data.items()}
-        ha_url = setup_data.get("ha_url", DEFAULT_HA_URL).strip()
-        ha_token = setup_data.get("ha_token", "").strip()
-        remote_entity = setup_data.get(
-            "ha_remote_entity", DEFAULT_REMOTE_ENTITY
-        ).strip()
-        device = setup_data.get("device", DEFAULT_DEVICE).strip()
-        delay_text = setup_data.get("delay_secs", str(DEFAULT_DELAY)).strip()
+    """Store setup data without contacting Home Assistant during driver setup.
 
-        if not ha_url or not ha_token:
-            return ucapi.SetupError()
-        if not remote_entity:
-            remote_entity = DEFAULT_REMOTE_ENTITY
-        if not device:
-            device = DEFAULT_DEVICE
+    This is intentional: the Remote 3 must be able to finish integration setup even
+    when Home Assistant is temporarily unavailable. Connectivity is tested when the
+    first lamp command is executed.
+    """
+    if not isinstance(msg, ucapi.DriverSetupRequest):
+        return ucapi.SetupError()
 
-        try:
-            delay_secs = float(delay_text)
-            if delay_secs < 0 or delay_secs > 10:
-                raise ValueError
-        except ValueError:
-            return ucapi.SetupError()
+    setup_data = {str(key): str(value) for key, value in msg.setup_data.items()}
+    ha_url = setup_data.get("ha_url", DEFAULT_HA_URL).strip()
+    ha_token = setup_data.get("ha_token", "").strip()
+    remote_entity = setup_data.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY).strip()
+    device = setup_data.get("device", DEFAULT_DEVICE).strip()
+    delay_text = setup_data.get("delay_secs", str(DEFAULT_DELAY)).strip()
 
-        new_config = {
-            "setup_complete": True,
-            "ha_url": ha_url,
-            "ha_token": ha_token,
-            "ha_remote_entity": remote_entity,
-            "device": device,
-            "delay_secs": delay_secs,
-        }
+    if not ha_url:
+        return ucapi.SetupError()
+    if not ha_token:
+        return ucapi.SetupError()
+    if not remote_entity:
+        remote_entity = DEFAULT_REMOTE_ENTITY
+    if not device:
+        device = DEFAULT_DEVICE
 
-        test_client = HomeAssistantClient(new_config)
-        try:
-            await test_client.test_connection()
-        except Exception as exc:
-            _LOG.error("Home Assistant setup test failed: %s", exc)
-            return ucapi.SetupError()
-        finally:
-            await test_client.close()
+    try:
+        delay_secs = float(delay_text)
+        if delay_secs < 0 or delay_secs > 10:
+            raise ValueError
+    except ValueError:
+        return ucapi.SetupError()
 
-        CONFIG.clear()
-        CONFIG.update(new_config)
-        save_config(CONFIG)
-        HA.config = CONFIG
-        add_stehlampe_entity()
-        _LOG.info("Home Assistant setup completed")
-        return ucapi.SetupComplete()
+    new_config = {
+        "setup_complete": True,
+        "ha_url": ha_url,
+        "ha_token": ha_token,
+        "ha_remote_entity": remote_entity,
+        "device": device,
+        "delay_secs": delay_secs,
+    }
 
-    return ucapi.SetupError()
+    CONFIG.clear()
+    CONFIG.update(new_config)
+    save_config(CONFIG)
+    HA.config = CONFIG
+    add_stehlampe_entity()
+    _LOG.info("Home Assistant setup completed for %s", remote_entity)
+    return ucapi.SetupComplete()
 
 
 @API.listens_to(ucapi.Events.CONNECT)
 async def on_connect() -> None:
-    """Report the driver as connected to the Remote 3."""
     await API.set_device_state(ucapi.DeviceStates.CONNECTED)
 
 
 @API.listens_to(ucapi.Events.DISCONNECT)
 async def on_disconnect() -> None:
-    """Report the driver as disconnected and close the HA session."""
     await HA.close()
     await API.set_device_state(ucapi.DeviceStates.DISCONNECTED)
 
@@ -319,6 +279,15 @@ if __name__ == "__main__":
         level=os.getenv("UC_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+
+    if not os.getenv("UC_INTEGRATION_HTTP_PORT"):
+        os.environ["UC_INTEGRATION_HTTP_PORT"] = "19123"
+        _LOG.warning("UC_INTEGRATION_HTTP_PORT was not set; using fallback port 19123")
+    else:
+        _LOG.info(
+            "Using runtime integration port %s",
+            os.getenv("UC_INTEGRATION_HTTP_PORT"),
+        )
 
     if CONFIG.get("setup_complete") and CONFIG.get("ha_token"):
         add_stehlampe_entity()

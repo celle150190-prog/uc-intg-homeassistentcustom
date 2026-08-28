@@ -51,13 +51,17 @@ jobs:
           import json
           from pathlib import Path
           data = json.loads(Path('driver.json').read_text(encoding='utf-8'))
-          required = {'driver_id', 'version', 'name', 'description', 'port'}
+          required = {'driver_id', 'version', 'min_core_api', 'name', 'icon', 'description', 'developer', 'home_page'}
           missing = required.difference(data)
           if missing:
               raise SystemExit(f'Missing driver.json keys: {sorted(missing)}')
-          if not isinstance(data['port'], int) or not (1 <= data['port'] <= 65535):
-              raise SystemExit('driver.json port must be an integer between 1 and 65535')
-          print('driver.json OK:', data['driver_id'], data['version'], 'port', data['port'])
+          if 'port' in data:
+              raise SystemExit('driver.json must not contain a hard-coded port for Remote custom installation; the runtime supplies UC_INTEGRATION_HTTP_PORT.')
+          if data['icon'] != 'uc:integration':
+              raise SystemExit('driver.json must use the known built-in icon uc:integration for this release.')
+          if data['min_core_api'] != '0.20.0':
+              raise SystemExit('driver.json min_core_api must remain at the baseline 0.20.0 for broad Remote compatibility.')
+          print('driver.json OK:', data['driver_id'], data['version'])
           PY
 
       - name: Prepare installation archive
@@ -66,9 +70,8 @@ jobs:
           rm -rf artifacts
           mkdir -p artifacts/bin
 
-          # Unfolded Circle requires driver.json in the archive root and the
-          # PyInstaller one-folder bundle contents directly below ./bin.
-          # The executable itself must be named ./bin/driver.
+          # Unfolded Circle custom integration archive layout:
+          # driver.json at archive root and PyInstaller one-folder contents in ./bin.
           cp -a "dist/intg-${INTG_NAME}/." artifacts/bin/
           mv "artifacts/bin/intg-${INTG_NAME}" "artifacts/bin/driver"
           cp driver.json artifacts/driver.json
@@ -162,17 +165,13 @@ jobs:
             - Home Assistant REST API: `remote.send_command`
             - Standard: `remote.broadlink` + Gerät `Stehlampe`
 
-            ## Setup und Netzwerk
-            - Home Assistant wird beim Einrichten nicht kontaktiert.
-            - Die Verbindung zu Home Assistant wird erst beim ersten Lampenbefehl aufgebaut.
-            - Das `port`-Metadatenfeld bleibt für die Remote-Installation erhalten.
-            - `UC_INTEGRATION_HTTP_PORT` kann den Port zur Laufzeit überschreiben.
-            - Fallback bei manuellem Start ohne Runtime-Variable: Port 19123.
-
             ## v${{ steps.version.outputs.version }} Änderungen
-            - Repariert die Archiv-Metadaten für den Remote-3-Web-Configurator durch Wiederherstellung des `port`-Feldes.
-            - Der Build prüft nun explizit, dass `port` in `driver.json` vorhanden und gültig ist.
-            - Archivstruktur wird weiterhin automatisch auf `driver.json` im Root und `./bin/driver` geprüft.
+            - Installer-Metadaten auf das dokumentierte Minimalformat für Custom Drivers zurückgeführt
+            - Verwendet das bekannte Built-in-Icon `uc:integration`
+            - `min_core_api` auf die dokumentierte Basisversion `0.20.0` gesetzt
+            - Kein hart codierter Port in `driver.json`; der Remote-3-Runtime-Port wird über `UC_INTEGRATION_HTTP_PORT` bereitgestellt
+            - Home Assistant wird beim Einrichten nicht kontaktiert; der Zugriff erfolgt erst beim Ausführen eines Lampenbefehls
+            - Archivstruktur wird automatisch geprüft: `driver.json` im Root und `./bin/driver`
 
             ## Installation
             Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist im Remote-3-Web-Configurator unter **Install custom** verwendbar.

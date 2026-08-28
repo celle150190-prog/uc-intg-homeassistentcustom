@@ -9,11 +9,11 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 import ucapi
 from ucapi import remote
-from ucapi.remote import create_send_cmd
 from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_text
 
 _LOG = logging.getLogger("homeassistantcustom")
@@ -29,8 +29,6 @@ DEFAULT_REMOTE_ENTITY = "remote.broadlink"
 DEFAULT_DEVICE = "Stehlampe"
 DEFAULT_DELAY = 0.4
 
-# Remote 3 command IDs. The UI labels are defined separately so EIN/AUS can be
-# displayed with the slash while keeping an identifier that is safe for command IDs.
 COMMANDS: dict[str, str] = {
     "EIN_AUS": "EIN/AUS",
     "HELLER": "HELLER",
@@ -72,25 +70,21 @@ def save_config(config: dict[str, Any]) -> None:
     tmp_file.replace(CONFIG_FILE)
 
 
-def normalize_ha_ws_url(value: str) -> str:
-    """Convert a Home Assistant HTTP(S) base URL to its WebSocket API URL."""
+def normalize_ha_http_url(value: str) -> str:
+    """Normalize a Home Assistant base URL for the REST API."""
     url = value.strip().rstrip("/")
-    if url.startswith("ws://") or url.startswith("wss://"):
-        if url.endswith("/api/websocket"):
-            return url
-        return f"{url}/api/websocket"
-    if url.startswith("http://"):
-        return f"ws://{url[7:]}/api/websocket"
-    if url.startswith("https://"):
-        return f"wss://{url[8:]}/api/websocket"
-    return f"ws://{url}/api/websocket"
+    if url.startswith("ws://"):
+        url = f"http://{url[5:]}"
+    elif url.startswith("wss://"):
+        url = f"https://{url[6:]}"
+    elif not url.startswith(("http://", "https://")):
+        url = f"http://{url}"
+    return url.rstrip("/")
 
 
 def create_button_mappings() -> list[dict[str, Any]]:
     """Map the physical Remote 3 volume keys to the lamp dimming commands."""
     return [
-        # Short-press mappings are intentional: the Remote 3 handles the physical
-        # button interaction and can be further customized in its button mapping UI.
         create_btn_mapping(Buttons.VOLUME_UP, "HELLER"),
         create_btn_mapping(Buttons.VOLUME_DOWN, "DUNKLER"),
     ]
@@ -107,115 +101,97 @@ def create_ui_pages() -> list[UiPage]:
 
 
 class HomeAssistantClient:
-    """Minimal authenticated Home Assistant WebSocket API client."""
+    """Minimal authenticated Home Assistant REST API client."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.session: aiohttp.ClientSession | None = None
-        self.ws: aiohttp.ClientWebSocketResponse | None = None
-        self.message_id = 0
-        self.authenticated = False
         self.lock = asyncio.Lock()
 
-    async def _connect_locked(self) -> None:
-        if self.ws and not self.ws.closed and self.authenticated:
-            return
-
-        await self._close_locked()
+    async def _ensure_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=15)
+            self.session = aiohttp.ClientSession(timeout=timeout)
+        return self.session
 
-        ws_url = normalize_ha_ws_url(str(self.config.get("ha_url", DEFAULT_HA_URL)))
-        self.ws = await self.session.ws_connect(ws_url, heartbeat=30)
-
-        hello = await self.ws.receive_json()
-        if hello.get("type") != "auth_required":
-            raise RuntimeError("Home Assistant did not request WebSocket authentication")
-
+    def _headers(self) -> dict[str, str]:
         token = str(self.config.get("ha_token", "")).strip()
         if not token:
             raise RuntimeError("Home Assistant access token is not configured")
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
 
-        await self.ws.send_json({"type": "auth", "access_token": token})
-        auth = await self.ws.receive_json()
-        if auth.get("type") != "auth_ok":
-            raise RuntimeError("Home Assistant authentication failed; check URL and token")
-
-        self.authenticated = True
-
-    async def _close_locked(self) -> None:
-        self.authenticated = False
-        if self.ws and not self.ws.closed:
-            await self.ws.close()
-        self.ws = None
-
-    async def _call_locked(self, payload: dict[str, Any]) -> dict[str, Any]:
-        await self._connect_locked()
-        assert self.ws is not None
-
-        self.message_id += 1
-        request_id = self.message_id
-        request = dict(payload)
-        request["id"] = request_id
-        await self.ws.send_json(request)
-
-        while True:
-            response = await self.ws.receive_json()
-            if response.get("id") != request_id:
-                continue
-            if response.get("success") is False:
-                error = response.get("error", {})
-                raise RuntimeError(str(error)[:400])
-            return response
-
-    async def get_states(self) -> list[dict[str, Any]]:
-        async with self.lock:
-            try:
-                response = await self._call_locked({"type": "get_states"})
-            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, RuntimeError):
-                await self._close_locked()
-                raise
-            result = response.get("result", [])
-            if not isinstance(result, list):
-                raise RuntimeError("Unexpected Home Assistant get_states response")
-            return result
+    def _base_url(self) -> str:
+        value = str(self.config.get("ha_url", DEFAULT_HA_URL))
+        return normalize_ha_http_url(value)
 
     async def test_connection(self) -> None:
-        """Authenticate and verify that the configured remote entity exists."""
-        states = await self.get_states()
-        expected = str(self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY))
-        if not any(state.get("entity_id") == expected for state in states):
-            raise RuntimeError(f"Home Assistant entity '{expected}' was not found")
+        """Verify HTTP connectivity, authentication and the configured remote entity."""
+        async with self.lock:
+            session = await self._ensure_session()
+            entity_id = str(
+                self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY)
+            ).strip()
+            if not entity_id:
+                raise RuntimeError("Home Assistant remote entity is not configured")
+
+            url = f"{self._base_url()}/api/states/{quote(entity_id, safe='')}"
+            _LOG.info("Testing Home Assistant connection: %s", url)
+            try:
+                async with session.get(url, headers=self._headers()) as response:
+                    body = await response.text()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                raise RuntimeError(f"Could not connect to Home Assistant: {exc}") from exc
+
+            if response.status == 200:
+                return
+            if response.status == 401:
+                raise RuntimeError("Home Assistant access token is invalid")
+            if response.status == 404:
+                raise RuntimeError(f"Home Assistant entity '{entity_id}' was not found")
+            detail = body.strip().replace("\n", " ")[:400]
+            raise RuntimeError(
+                f"Home Assistant returned HTTP {response.status}"
+                + (f": {detail}" if detail else "")
+            )
 
     async def send_remote_command(self, command: str) -> None:
-        """Call Home Assistant's remote.send_command service."""
+        """Call Home Assistant's remote.send_command service via REST."""
         async with self.lock:
+            session = await self._ensure_session()
+            url = f"{self._base_url()}/api/services/remote/send_command"
+            payload = {
+                "entity_id": str(
+                    self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY)
+                ),
+                "delay_secs": float(self.config.get("delay_secs", DEFAULT_DELAY)),
+                "hold_secs": 0,
+                "device": str(self.config.get("device", DEFAULT_DEVICE)),
+                "command": command,
+            }
+            _LOG.info("Sending Home Assistant command '%s' via %s", command, url)
             try:
-                await self._call_locked(
-                    {
-                        "type": "call_service",
-                        "domain": "remote",
-                        "service": "send_command",
-                        "target": {
-                            "entity_id": str(
-                                self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY)
-                            )
-                        },
-                        "service_data": {
-                            "delay_secs": float(self.config.get("delay_secs", DEFAULT_DELAY)),
-                            "hold_secs": 0,
-                            "device": str(self.config.get("device", DEFAULT_DEVICE)),
-                            "command": command,
-                        },
-                    }
-                )
-            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, RuntimeError):
-                await self._close_locked()
-                raise
+                async with session.post(
+                    url, headers=self._headers(), json=payload
+                ) as response:
+                    body = await response.text()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                raise RuntimeError(f"Could not connect to Home Assistant: {exc}") from exc
+
+            if 200 <= response.status < 300:
+                return
+            if response.status == 401:
+                raise RuntimeError("Home Assistant access token is invalid")
+            detail = body.strip().replace("\n", " ")[:400]
+            raise RuntimeError(
+                f"Home Assistant returned HTTP {response.status}"
+                + (f": {detail}" if detail else "")
+            )
 
     async def close(self) -> None:
         async with self.lock:
-            await self._close_locked()
             if self.session and not self.session.closed:
                 await self.session.close()
             self.session = None
@@ -276,13 +252,13 @@ async def driver_setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
         setup_data = {str(key): str(value) for key, value in msg.setup_data.items()}
         ha_url = setup_data.get("ha_url", DEFAULT_HA_URL).strip()
         ha_token = setup_data.get("ha_token", "").strip()
-        remote_entity = setup_data.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY).strip()
+        remote_entity = setup_data.get(
+            "ha_remote_entity", DEFAULT_REMOTE_ENTITY
+        ).strip()
         device = setup_data.get("device", DEFAULT_DEVICE).strip()
         delay_text = setup_data.get("delay_secs", str(DEFAULT_DELAY)).strip()
 
-        if not ha_url:
-            return ucapi.SetupError()
-        if not ha_token:
+        if not ha_url or not ha_token:
             return ucapi.SetupError()
         if not remote_entity:
             remote_entity = DEFAULT_REMOTE_ENTITY
@@ -310,7 +286,6 @@ async def driver_setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
             await test_client.test_connection()
         except Exception as exc:
             _LOG.error("Home Assistant setup test failed: %s", exc)
-            await test_client.close()
             return ucapi.SetupError()
         finally:
             await test_client.close()
@@ -334,7 +309,7 @@ async def on_connect() -> None:
 
 @API.listens_to(ucapi.Events.DISCONNECT)
 async def on_disconnect() -> None:
-    """Report the driver as disconnected and close the HA connection."""
+    """Report the driver as disconnected and close the HA session."""
     await HA.close()
     await API.set_device_state(ucapi.DeviceStates.DISCONNECTED)
 

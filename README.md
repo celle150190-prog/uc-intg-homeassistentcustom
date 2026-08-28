@@ -15,7 +15,7 @@ Geräte
     └── MODUS
 ```
 
-The entity also publishes its own UI page with those four controls. No activity is required.
+The entity publishes its own UI page with those four controls. No activity is required.
 
 The physical Remote 3 volume keys are mapped to:
 
@@ -24,11 +24,9 @@ VOL+ → HELLER
 VOL− → DUNKLER
 ```
 
-The implementation uses the official Unfolded Circle Integration API and its Remote entity support for simple commands, physical button mappings and UI pages.
-
 ## Home Assistant side
 
-The driver calls Home Assistant directly through the WebSocket API and invokes the `remote.send_command` service with the same values as the existing scripts:
+The driver calls the Home Assistant REST API and invokes the `remote.send_command` service with the same values used by the existing scripts:
 
 ```yaml
 action: remote.send_command
@@ -41,18 +39,18 @@ data:
   command: <COMMAND>
 ```
 
-The four Home Assistant commands are:
+The four commands are:
 
 - `EIN/AUS`
 - `HELLER`
 - `DUNKLER`
 - `MODUS`
 
-The previous four Home Assistant scripts are therefore no longer required once this integration is working.
+The previous four Home Assistant scripts are therefore not required for the Remote once this integration is working.
 
 ## Setup
 
-During integration setup on the Remote 3 / web configurator, enter:
+Enter the following values in the Remote 3 / web configurator:
 
 - Home Assistant URL, for example `http://homeassistant.local:8123`
 - Home Assistant Long-Lived Access Token
@@ -60,9 +58,15 @@ During integration setup on the Remote 3 / web configurator, enter:
 - Remote device name, default `Stehlampe`
 - Command delay, default `0.4` seconds
 
-The driver authenticates with Home Assistant and verifies that the configured remote entity exists before completing setup.
+The setup flow only validates and stores the configuration. It deliberately does **not** contact Home Assistant while the integration is being installed. This prevents a temporary Home Assistant/network problem from aborting Remote 3 integration setup.
 
-The access token is **not** stored in the GitHub repository. It is stored only in the integration's runtime configuration on the Remote.
+The Home Assistant REST request is performed when a lamp command is executed. Errors are written to the integration log and returned as a failed command.
+
+The access token is not stored in the GitHub repository. It is stored only in the integration's runtime configuration on the Remote.
+
+## Network and driver port
+
+The Remote 3 custom-integration runtime supplies the Integration API port through `UC_INTEGRATION_HTTP_PORT`. The metadata therefore does not hard-code a port. For local/manual execution only, the driver uses port `19123` as a fallback when the runtime variable is not present.
 
 ## Build
 
@@ -75,7 +79,7 @@ After pushing to `main` or starting the workflow manually:
 3. Download the artifact `uc-intg-homeassistantcustom-aarch64`.
 4. Use the contained `uc-intg-homeassistantcustom-aarch64.tar.gz` in the Remote 3 custom-integration installer.
 
-The archive has the expected custom-integration structure with `driver.json` at the root and the compiled driver below `bin/driver`.
+The archive is validated to contain `driver.json` at the root and the compiled executable at `./bin/driver`.
 
 ## Development
 

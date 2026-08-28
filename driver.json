@@ -9,13 +9,81 @@
   },
   "icon": "uc:home-assistant",
   "description": {
-    "en": "Custom command integration for Home Assistant devices",
-    "de": "Eigene Befehlsintegration für Home-Assistant-Geräte"
+    "en": "Standalone Home Assistant command integration for a floor lamp",
+    "de": "Eigenständige Home-Assistant-Befehlsintegration für eine Stehlampe"
   },
   "port": 9090,
   "developer": {
     "name": "Marci",
     "url": "https://github.com/celle150190-prog/uc-intg-homeassistentcustom"
   },
-  "home_page": "https://github.com/celle150190-prog/uc-intg-homeassistentcustom"
+  "home_page": "https://github.com/celle150190-prog/uc-intg-homeassistentcustom",
+  "setup_data_schema": {
+    "title": {
+      "en": "Home Assistant connection",
+      "de": "Home-Assistant-Verbindung"
+    },
+    "settings": [
+      {
+        "id": "ha_url",
+        "label": {
+          "en": "Home Assistant URL",
+          "de": "Home-Assistant-URL"
+        },
+        "field": {
+          "text": {
+            "value": "http://homeassistant.local:8123"
+          }
+        }
+      },
+      {
+        "id": "ha_token",
+        "label": {
+          "en": "Long-Lived Access Token",
+          "de": "Langzeit-Zugriffstoken"
+        },
+        "field": {
+          "text": {
+            "value": ""
+          }
+        }
+      },
+      {
+        "id": "ha_remote_entity",
+        "label": {
+          "en": "Home Assistant remote entity",
+          "de": "Home-Assistant-Remote-Entity"
+        },
+        "field": {
+          "text": {
+            "value": "remote.broadlink"
+          }
+        }
+      },
+      {
+        "id": "device",
+        "label": {
+          "en": "Remote device name",
+          "de": "Name des Remote-Geräts"
+        },
+        "field": {
+          "text": {
+            "value": "Stehlampe"
+          }
+        }
+      },
+      {
+        "id": "delay_secs",
+        "label": {
+          "en": "Command delay (seconds)",
+          "de": "Befehlsverzögerung (Sekunden)"
+        },
+        "field": {
+          "text": {
+            "value": "0.4"
+          }
+        }
+      }
+    ]
+  }
 }

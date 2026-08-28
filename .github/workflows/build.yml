@@ -36,6 +36,22 @@ jobs:
             bash -c \
             "cd /workspace && \
              python -m pip install -r requirements.txt && \
+             python - <<'PY'\
+             import asyncio\
+             import driver\
+             driver.add_stehlampe_entity()\
+             assert list(driver.SCRIPT_ENTITIES) == ['EIN_AUS', 'HELLER', 'DUNKLER', 'MODUS']\
+             async def test_handler():\
+                 calls = []\
+                 async def fake_run_script(command):\
+                     calls.append(command)\
+                 driver.HA.run_script = fake_run_script\
+                 status = await driver.command_handler(None, 'send_cmd', {'command': 'HELLER'}, None)\
+                 assert int(status) == 200\
+                 assert calls == ['HELLER']\
+             asyncio.run(test_handler())\
+             print('Driver runtime self-test OK')\
+             PY\
              pyinstaller --clean --onedir --name intg-${INTG_NAME} driver.py"
 
       - name: Validate build output and metadata
@@ -52,10 +68,12 @@ jobs:
           missing = required.difference(data)
           if missing:
               raise SystemExit(f'Missing driver.json keys: {sorted(missing)}')
+          if data['driver_id'] != 'stehlampe-ha':
+              raise SystemExit(f"Unexpected driver_id: {data['driver_id']}")
           if 'port' in data:
-              raise SystemExit('driver.json must not contain a hard-coded port for Remote custom installation; the runtime supplies UC_INTEGRATION_HTTP_PORT.')
+              raise SystemExit('driver.json must not contain a hard-coded port; the Remote runtime supplies UC_INTEGRATION_HTTP_PORT.')
           if data['icon'] != 'uc:integration':
-              raise SystemExit('driver.json must use the known built-in icon uc:integration for this release.')
+              raise SystemExit('driver.json must use the known built-in icon uc:integration.')
           print('driver.json OK:', data['driver_id'], data['version'])
           print('config/config.json OK')
           PY
@@ -81,6 +99,7 @@ jobs:
           grep -Fxq './driver.json' archive.contents
           grep -Fxq './bin/driver' archive.contents
           grep -Fxq './config/config.json' archive.contents
+          ! grep -E '(^|/)([^/ ]+ )|\([0-9]+\)\.tar\.gz$' archive.contents
           rm -f archive.contents
           sha256sum "uc-intg-${INTG_NAME}-aarch64.tar.gz" > "uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256"
 
@@ -158,18 +177,20 @@ jobs:
             - **DUNKLER**
             - **MODUS**
             - Physische Lautstärketasten: **VOL+ → HELLER**, **VOL− → DUNKLER**
-            - Home Assistant REST API: `remote.send_command`
-            - Standard: `remote.broadlink` + Gerät `Stehlampe`
+            - Nutzt die vier vorhandenen Home-Assistant-Skripte für die Stehlampe
+            - Kein Zugriff auf Home Assistant während des Remote-Setups
 
             ## v${{ steps.version.outputs.version }} Änderungen
-            - Vollständiges Custom-Driver-Archiv inklusive `driver.json`, `bin/driver` und `config/config.json`.
-            - Installationsstruktur wird im Build automatisch geprüft.
-            - Home Assistant wird erst beim Ausführen eines Lampenbefehls kontaktiert.
+            - Neuer eigenständiger Custom-Driver mit der eindeutigen `driver_id` `stehlampe-ha`.
+            - Verwendet die bereits funktionierenden HA-Skripte `script.ein_aus_stehlampe`, `script.heller_stehlampe`, `script.dunkler_stehlampe` und `script.modus_stehlampe`.
+            - Korrekte Verarbeitung des Remote-3-`send_cmd`-Wrappers für Simple Commands.
+            - Runtime-Selbsttest im Build.
+            - Installationsarchiv wird vor dem Release strukturell geprüft.
 
             ## Installation
             Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist im Remote-3-Web-Configurator unter **Install custom** verwendbar.
 
-            Die Integration ist eigenständig und hat die `driver_id` `homeassistantcustom`.
+            **Kein Update der eingebauten Home-Assistant-Integration:** Dieser Driver verwendet die separate `driver_id` `stehlampe-ha`.
           files: |
             release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz
             release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz.sha256

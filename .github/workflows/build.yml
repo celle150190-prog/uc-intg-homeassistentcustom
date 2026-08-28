@@ -44,7 +44,7 @@ jobs:
 
       - name: Validate build output
         run: |
-          test -x dist/intg-${INTG_NAME}/driver
+          test -x dist/intg-${INTG_NAME}/intg-${INTG_NAME}
           test -f driver.json
           python3 - <<'PY'
           import json

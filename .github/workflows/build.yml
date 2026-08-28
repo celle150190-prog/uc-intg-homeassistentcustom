@@ -11,10 +11,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   INTG_NAME: homeassistantcustom
   PYTHON_VER: 3.11.13-0.7.0
@@ -69,10 +65,6 @@ jobs:
         run: |
           rm -rf artifacts
           mkdir -p artifacts/bin artifacts/config
-
-          # Unfolded Circle custom integration archive layout:
-          # driver.json at archive root, PyInstaller one-folder contents in ./bin,
-          # and writable runtime config in ./config.
           cp -a "dist/intg-${INTG_NAME}/." artifacts/bin/
           mv "artifacts/bin/intg-${INTG_NAME}" "artifacts/bin/driver"
           cp driver.json artifacts/driver.json
@@ -170,8 +162,8 @@ jobs:
             - Standard: `remote.broadlink` + Gerät `Stehlampe`
 
             ## v${{ steps.version.outputs.version }} Änderungen
-            - Custom-Integration-Archiv enthält `driver.json`, `bin/driver` und `config/config.json`.
-            - Die Build-Prüfung validiert die vollständige Installationsstruktur vor Veröffentlichung.
+            - Vollständiges Custom-Driver-Archiv inklusive `driver.json`, `bin/driver` und `config/config.json`.
+            - Installationsstruktur wird im Build automatisch geprüft.
             - Home Assistant wird erst beim Ausführen eines Lampenbefehls kontaktiert.
 
             ## Installation

@@ -51,10 +51,12 @@ jobs:
           import json
           from pathlib import Path
           data = json.loads(Path('driver.json').read_text(encoding='utf-8'))
-          required = {'driver_id', 'version', 'name', 'description', 'port'}
+          required = {'driver_id', 'version', 'name', 'description'}
           missing = required.difference(data)
           if missing:
               raise SystemExit(f'Missing driver.json keys: {sorted(missing)}')
+          if 'port' in data:
+              raise SystemExit('Custom driver metadata must not hard-code a port; the Remote runtime supplies UC_INTEGRATION_HTTP_PORT.')
           print('driver.json OK:', data['driver_id'], data['version'])
           PY
 
@@ -148,33 +150,30 @@ jobs:
           body: |
             # Stehlampe Integration v${{ steps.version.outputs.version }}
 
-            Fehlerbereinigtes Release der eigenständigen Home-Assistant-Custom-Integration für die Unfolded Circle Remote 3.
-
-            ## Behobene Probleme
-            - Korrekte Struktur des TAR.GZ-Installationsarchivs
-            - `driver.json` liegt direkt im Archiv-Root
-            - Der PyInstaller-OneDir-Inhalt liegt direkt unter `./bin`
-            - Der ausführbare Treiber liegt als `./bin/driver` vor
-            - Die Archivstruktur wird vor der Veröffentlichung automatisch geprüft
+            Eigenständiger Home-Assistant-Custom-Driver für die Unfolded Circle Remote 3.
 
             ## Funktionen
-            - Eigenes Gerät **Stehlampe** auf der Geräte-Seite, ohne Aktivität
+            - Ein Gerät **Stehlampe** auf der Geräte-Seite, ohne Aktivität
             - **EIN/AUS**
             - **HELLER**
             - **DUNKLER**
             - **MODUS**
             - Physische Lautstärketasten: **VOL+ → HELLER**, **VOL− → DUNKLER**
-            - Direkte Ansteuerung von Home Assistant über `remote.send_command`
-            - Standardmäßig `remote.broadlink` und Gerät `Stehlampe`
-            - Konfigurierbare Home-Assistant-URL, Long-Lived Access Token, Remote-Entity, Gerätename und Befehlsverzögerung
+            - Home Assistant REST API: `remote.send_command`
+            - Standard: `remote.broadlink` + Gerät `Stehlampe`
 
-            ## Home Assistant
-            Die Integration sendet die Befehle `EIN/AUS`, `HELLER`, `DUNKLER` und `MODUS` an das Home-Assistant-Remote-Gerät `remote.broadlink` mit dem Zielgerät `Stehlampe`.
+            ## v1.0.5 Änderungen
+            - Kein hart codierter Integrations-Port mehr in `driver.json`
+            - Verwendung des von der Remote bereitgestellten `UC_INTEGRATION_HTTP_PORT`
+            - Fallback auf Port 19123 nur für Umgebungen, in denen der Runtime-Port nicht gesetzt ist
+            - Home Assistant wird beim Einrichten nicht mehr kontaktiert; dadurch kann der Driver auch bei vorübergehend nicht erreichbarem Home Assistant fertig eingerichtet werden
+            - Die Home-Assistant-Verbindung wird erst beim Ausführen eines Lampenbefehls hergestellt
+            - Archivstruktur wird weiterhin automatisch auf `driver.json` im Root und `./bin/driver` geprüft
 
             ## Installation
-            Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist direkt im Web-Configurator der Unfolded Circle Remote 3 unter **Install custom** verwendbar.
+            Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist im Remote-3-Web-Configurator unter **Install custom** verwendbar.
 
-            Zusätzlich ist ein SHA-256-Prüfwert als separates Asset enthalten.
+            Für das Ersetzen einer bereits installierten Version kann die Option **Installierte Integration aktualisieren** erforderlich sein.
           files: |
             release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz
             release-assets/uc-intg-homeassistantcustom-aarch64.tar.gz.sha256

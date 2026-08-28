@@ -201,10 +201,15 @@ async def command_handler(
     entity: ucapi.Remote,
     cmd_id: str,
     params: dict[str, Any] | None,
-    _websocket: Any,
+    *,
+    websocket: Any,
 ) -> ucapi.StatusCodes:
-    """Handle direct commands and the Core-wrapped SEND_CMD form."""
-    del entity
+    """Handle direct commands and the Core-wrapped SEND_CMD form.
+
+    The ``websocket`` keyword is intentionally explicit so ucapi treats this as
+    an extended command handler and passes the connection through correctly.
+    """
+    del entity, websocket
 
     # Remote Core wraps simple commands used by button mappings/UI elements into
     # the standard `send_cmd` command with params={"command": "<simple_command>"}.

@@ -1,0 +1,8 @@
+{
+  "setup_complete": false,
+  "ha_url": "http://homeassistant.local:8123",
+  "ha_token": "PUT-YOUR-LONG-LIVED-ACCESS-TOKEN-HERE",
+  "ha_remote_entity": "remote.broadlink",
+  "device": "Stehlampe",
+  "delay_secs": 0.4
+}

@@ -12,26 +12,25 @@ from typing import Any
 
 import aiohttp
 import ucapi
+from ucapi import remote as uc_remote
 from ucapi.ui import Buttons, Size, UiPage, create_btn_mapping, create_ui_text
 
-_LOG = logging.getLogger("homeassistantcustom")
+_LOG = logging.getLogger("stehlampe-ha")
 
-DRIVER_CONFIG_DIR = Path(os.getenv("UC_CONFIG_HOME", "."))
-CONFIG_FILE = DRIVER_CONFIG_DIR / "homeassistantcustom.json"
+DRIVER_CONFIG_DIR = Path(os.getenv("UC_CONFIG_HOME") or os.getenv("HOME") or "./")
+CONFIG_FILE = DRIVER_CONFIG_DIR / "stehlampe-ha.json"
 DRIVER_JSON = Path(__file__).with_name("driver.json")
 
 ENTITY_ID = "stehlampe"
 ENTITY_NAME = "Stehlampe"
 DEFAULT_HA_URL = "http://homeassistant.local:8123"
-DEFAULT_REMOTE_ENTITY = "remote.broadlink"
-DEFAULT_DEVICE = "Stehlampe"
-DEFAULT_DELAY = 0.4
 
-COMMANDS: dict[str, str] = {
-    "EIN_AUS": "EIN/AUS",
-    "HELLER": "HELLER",
-    "DUNKLER": "DUNKLER",
-    "MODUS": "MODUS",
+# These are the four Home Assistant scripts the user already tested successfully.
+SCRIPT_ENTITIES: dict[str, str] = {
+    "EIN_AUS": "script.ein_aus_stehlampe",
+    "HELLER": "script.heller_stehlampe",
+    "DUNKLER": "script.dunkler_stehlampe",
+    "MODUS": "script.modus_stehlampe",
 }
 
 
@@ -40,9 +39,6 @@ def _default_config() -> dict[str, Any]:
         "setup_complete": False,
         "ha_url": DEFAULT_HA_URL,
         "ha_token": "",
-        "ha_remote_entity": DEFAULT_REMOTE_ENTITY,
-        "device": DEFAULT_DEVICE,
-        "delay_secs": DEFAULT_DELAY,
     }
 
 
@@ -69,10 +65,9 @@ def save_config(config: dict[str, Any]) -> None:
 
 
 def normalize_ha_http_url(value: str) -> str:
-    """Normalize a Home Assistant base URL for the REST API."""
     url = value.strip().rstrip("/")
     if url.startswith("ws://"):
-        url = f"http://{url[5:]}"
+        url = f"http://{url[5:] }"
     elif url.startswith("wss://"):
         url = f"https://{url[6:] }"
     elif not url.startswith(("http://", "https://")):
@@ -81,7 +76,7 @@ def normalize_ha_http_url(value: str) -> str:
 
 
 def create_button_mappings() -> list[dict[str, Any]]:
-    """Map the physical Remote 3 volume keys to the lamp dimming commands."""
+    """VOL+ and VOL- directly control the lamp brightness."""
     return [
         create_btn_mapping(Buttons.VOLUME_UP, "HELLER"),
         create_btn_mapping(Buttons.VOLUME_DOWN, "DUNKLER"),
@@ -89,7 +84,7 @@ def create_button_mappings() -> list[dict[str, Any]]:
 
 
 def create_ui_pages() -> list[UiPage]:
-    """Create the Stehlampe UI page with the four commands."""
+    """Four direct controls shown on the Stehlampe device page."""
     page = UiPage("stehlampe", "Stehlampe", grid=Size(4, 6))
     page.add(create_ui_text("EIN/AUS", 0, 0, size=Size(4, 1), cmd="EIN_AUS"))
     page.add(create_ui_text("HELLER", 0, 2, size=Size(2, 1), cmd="HELLER"))
@@ -99,7 +94,7 @@ def create_ui_pages() -> list[UiPage]:
 
 
 class HomeAssistantClient:
-    """Minimal authenticated Home Assistant REST API client."""
+    """Small authenticated REST client that triggers the existing HA scripts."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -108,8 +103,9 @@ class HomeAssistantClient:
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
-            timeout = aiohttp.ClientTimeout(total=15)
-            self.session = aiohttp.ClientSession(timeout=timeout)
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15)
+            )
         return self.session
 
     def _headers(self) -> dict[str, str]:
@@ -124,33 +120,38 @@ class HomeAssistantClient:
     def _base_url(self) -> str:
         return normalize_ha_http_url(str(self.config.get("ha_url", DEFAULT_HA_URL)))
 
-    async def send_remote_command(self, command: str) -> None:
-        """Invoke Home Assistant's remote.send_command service."""
+    async def run_script(self, simple_command: str) -> None:
+        script_entity = SCRIPT_ENTITIES.get(simple_command)
+        if script_entity is None:
+            raise RuntimeError(f"Unknown Stehlampe command: {simple_command}")
+
         async with self.lock:
             session = await self._ensure_session()
-            url = f"{self._base_url()}/api/services/remote/send_command"
-            payload = {
-                "entity_id": str(
-                    self.config.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY)
-                ),
-                "delay_secs": float(self.config.get("delay_secs", DEFAULT_DELAY)),
-                "hold_secs": 0,
-                "device": str(self.config.get("device", DEFAULT_DEVICE)),
-                "command": command,
-            }
-            _LOG.info("Sending Home Assistant command '%s' via %s", command, url)
+            url = f"{self._base_url()}/api/services/script/turn_on"
+            payload = {"entity_id": script_entity}
+            _LOG.info(
+                "Running Home Assistant script '%s' for command '%s'",
+                script_entity,
+                simple_command,
+            )
             try:
-                async with session.post(url, headers=self._headers(), json=payload) as response:
+                async with session.post(
+                    url, headers=self._headers(), json=payload
+                ) as response:
                     body = await response.text()
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                raise RuntimeError(f"Could not connect to Home Assistant: {exc}") from exc
+                raise RuntimeError(
+                    f"Could not connect to Home Assistant: {exc}"
+                ) from exc
 
             if 200 <= response.status < 300:
                 return
             if response.status == 401:
                 raise RuntimeError("Home Assistant access token is invalid")
             if response.status == 404:
-                raise RuntimeError("Home Assistant remote entity or command endpoint was not found")
+                raise RuntimeError(
+                    f"Home Assistant script '{script_entity}' was not found"
+                )
             detail = body.strip().replace("\n", " ")[:400]
             raise RuntimeError(
                 f"Home Assistant returned HTTP {response.status}"
@@ -171,20 +172,19 @@ API = ucapi.IntegrationAPI(LOOP)
 
 
 def add_stehlampe_entity() -> None:
-    """Publish the single Stehlampe Remote entity."""
+    """Publish exactly one Remote entity named Stehlampe."""
     API.available_entities.clear()
     entity = ucapi.Remote(
         identifier=ENTITY_ID,
         name={"en": ENTITY_NAME, "de": ENTITY_NAME},
-        features=[],
+        features=[uc_remote.Features.SEND_CMD],
         attributes={},
-        simple_commands=list(COMMANDS.keys()),
+        simple_commands=list(SCRIPT_ENTITIES.keys()),
         button_mapping=create_button_mappings(),
         ui_pages=create_ui_pages(),
         cmd_handler=command_handler,
-        icon="uc:lightbulb",
         description={
-            "en": "Standalone Home Assistant control for the floor lamp",
+            "en": "Standalone Home Assistant controls for the floor lamp",
             "de": "Eigenständige Home-Assistant-Steuerung für die Stehlampe",
         },
     )
@@ -194,73 +194,72 @@ def add_stehlampe_entity() -> None:
 async def command_handler(
     entity: ucapi.Remote,
     cmd_id: str,
-    _params: dict[str, Any] | None,
+    params: dict[str, Any] | None,
     _websocket: Any,
 ) -> ucapi.StatusCodes:
-    """Handle Remote 3 entity commands."""
+    """Handle direct commands and the Core-wrapped SEND_CMD form."""
     del entity
-    command = COMMANDS.get(cmd_id)
-    if command is None:
-        _LOG.error("Unsupported command '%s'", cmd_id)
+
+    # Remote Core wraps simple commands used by button mappings/UI elements into
+    # the standard `send_cmd` command with params={"command": "<simple_command>"}.
+    if cmd_id == uc_remote.Commands.SEND_CMD:
+        payload = params or {}
+        command = payload.get("command")
+        if not isinstance(command, str):
+            _LOG.error("SEND_CMD received without a valid simple command: %r", params)
+            return ucapi.StatusCodes.BAD_REQUEST
+    else:
+        command = cmd_id
+
+    if command not in SCRIPT_ENTITIES:
+        _LOG.error("Unsupported Stehlampe command '%s'", command)
         return ucapi.StatusCodes.BAD_REQUEST
 
     try:
-        await HA.send_remote_command(command)
+        await HA.run_script(command)
         return ucapi.StatusCodes.OK
     except Exception as exc:
-        _LOG.error("Failed to send '%s' to Home Assistant: %s", command, exc)
+        _LOG.error("Failed to run '%s': %s", command, exc)
         return ucapi.StatusCodes.SERVICE_UNAVAILABLE
 
 
 async def driver_setup_handler(msg: ucapi.SetupDriver) -> ucapi.SetupAction:
-    """Store setup data without contacting Home Assistant during driver setup.
-
-    This is intentional: the Remote 3 must be able to finish integration setup even
-    when Home Assistant is temporarily unavailable. Connectivity is tested when the
-    first lamp command is executed.
-    """
+    """Validate and store setup data without contacting Home Assistant."""
     if not isinstance(msg, ucapi.DriverSetupRequest):
         return ucapi.SetupError()
 
-    setup_data = {str(key): str(value) for key, value in msg.setup_data.items()}
-    ha_url = setup_data.get("ha_url", DEFAULT_HA_URL).strip()
-    ha_token = setup_data.get("ha_token", "").strip()
-    remote_entity = setup_data.get("ha_remote_entity", DEFAULT_REMOTE_ENTITY).strip()
-    device = setup_data.get("device", DEFAULT_DEVICE).strip()
-    delay_text = setup_data.get("delay_secs", str(DEFAULT_DELAY)).strip()
-
-    if not ha_url:
-        return ucapi.SetupError()
-    if not ha_token:
-        return ucapi.SetupError()
-    if not remote_entity:
-        remote_entity = DEFAULT_REMOTE_ENTITY
-    if not device:
-        device = DEFAULT_DEVICE
-
     try:
-        delay_secs = float(delay_text)
-        if delay_secs < 0 or delay_secs > 10:
-            raise ValueError
-    except ValueError:
+        setup_data = {
+            str(key): str(value) for key, value in msg.setup_data.items()
+        }
+        ha_url = setup_data.get("ha_url", DEFAULT_HA_URL).strip()
+        ha_token = setup_data.get("ha_token", "").strip()
+
+        if not ha_url:
+            _LOG.error("Setup rejected: Home Assistant URL is empty")
+            return ucapi.SetupError()
+        if not ha_token:
+            _LOG.error("Setup rejected: Home Assistant token is empty")
+            return ucapi.SetupError()
+
+        new_config = {
+            "setup_complete": True,
+            "ha_url": ha_url,
+            "ha_token": ha_token,
+        }
+        CONFIG.clear()
+        CONFIG.update(new_config)
+        save_config(CONFIG)
+        HA.config = CONFIG
+        add_stehlampe_entity()
+        _LOG.info("Stehlampe setup completed")
+        return ucapi.SetupComplete()
+    except Exception:
+        # Never let a setup exception crash the driver. The Remote Core developer
+        # preview has a known failure mode where a failed setup leaves the driver
+        # stopped until the custom integration is removed and installed again.
+        _LOG.exception("Unexpected exception during Stehlampe setup")
         return ucapi.SetupError()
-
-    new_config = {
-        "setup_complete": True,
-        "ha_url": ha_url,
-        "ha_token": ha_token,
-        "ha_remote_entity": remote_entity,
-        "device": device,
-        "delay_secs": delay_secs,
-    }
-
-    CONFIG.clear()
-    CONFIG.update(new_config)
-    save_config(CONFIG)
-    HA.config = CONFIG
-    add_stehlampe_entity()
-    _LOG.info("Home Assistant setup completed for %s", remote_entity)
-    return ucapi.SetupComplete()
 
 
 @API.listens_to(ucapi.Events.CONNECT)

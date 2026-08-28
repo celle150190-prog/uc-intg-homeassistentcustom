@@ -19,7 +19,7 @@ env:
 
 jobs:
   release:
-    name: Build and release v1.0.0
+    name: Build and release
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
@@ -37,7 +37,6 @@ jobs:
           PY
           )
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          test "$VERSION" = "1.0.0"
 
       - name: Build with Unfolded Circle PyInstaller image
         run: |
@@ -54,17 +53,30 @@ jobs:
 
       - name: Validate build output
         run: |
-          test -x dist/intg-${INTG_NAME}/intg-${INTG_NAME}
+          test -d "dist/intg-${INTG_NAME}"
+          test -x "dist/intg-${INTG_NAME}/intg-${INTG_NAME}"
           test -f driver.json
 
       - name: Prepare release archive
+        shell: bash
         run: |
+          rm -rf artifacts
           mkdir -p artifacts/bin
+
+          # Unfolded Circle expects the PyInstaller one-folder bundle contents
+          # directly below ./bin, with the executable itself named ./bin/driver.
+          cp -a "dist/intg-${INTG_NAME}/." artifacts/bin/
+          mv "artifacts/bin/intg-${INTG_NAME}" "artifacts/bin/driver"
           cp driver.json artifacts/driver.json
-          mv dist/intg-${INTG_NAME} artifacts/bin/driver
-          tar -czf uc-intg-${INTG_NAME}-aarch64.tar.gz -C artifacts .
-          tar -tzf uc-intg-${INTG_NAME}-aarch64.tar.gz
-          sha256sum uc-intg-${INTG_NAME}-aarch64.tar.gz > uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256
+
+          test -x artifacts/bin/driver
+          test -f artifacts/driver.json
+
+          tar -czf "uc-intg-${INTG_NAME}-aarch64.tar.gz" -C artifacts .
+          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz"
+          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" | grep -Eq '^\./driver\.json$'
+          tar -tzf "uc-intg-${INTG_NAME}-aarch64.tar.gz" | grep -Eq '^\./bin/driver$'
+          sha256sum "uc-intg-${INTG_NAME}-aarch64.tar.gz" > "uc-intg-${INTG_NAME}-aarch64.tar.gz.sha256"
 
       - name: Check whether release already exists
         id: release_check
@@ -90,10 +102,17 @@ jobs:
           body: |
             # Stehlampe Integration v${{ steps.version.outputs.version }}
 
-            Erste Release-Version der eigenständigen Home-Assistant-Custom-Integration für die Unfolded Circle Remote 3.
+            Fehlerbereinigtes Release der eigenständigen Home-Assistant-Custom-Integration für die Unfolded Circle Remote 3.
 
-            ## Enthalten
-            - Ein eigenes Gerät **Stehlampe** ohne Aktivität
+            ## Änderungen
+            - Korrektes Unfolded-Circle-Installationsarchiv mit `driver.json` im Archiv-Root
+            - PyInstaller-OneDir-Inhalt liegt direkt unter `./bin`
+            - Ausführbarer Treiber liegt als `./bin/driver` vor
+            - Archivstruktur wird im CI vor der Veröffentlichung automatisch validiert
+            - SHA-256-Prüfsumme wird weiterhin als separates Asset veröffentlicht
+
+            ## Funktionen
+            - Eigenes Gerät **Stehlampe** ohne Aktivität
             - **EIN/AUS**
             - **HELLER**
             - **DUNKLER**
@@ -103,13 +122,8 @@ jobs:
             - Standardmäßig `remote.broadlink` und Gerät `Stehlampe`
             - Einstellbare Home-Assistant-URL, Long-Lived Access Token, Remote-Entity, Gerätename und Verzögerung
 
-            ## Home Assistant
-            Die Integration verwendet die vorhandene Remote-Entity `remote.broadlink` und sendet die Befehle `EIN/AUS`, `HELLER`, `DUNKLER` und `MODUS` an das Gerät `Stehlampe`.
-
             ## Installation
-            Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist als eigenständige Custom Integration für die Unfolded Circle Remote 3 gedacht.
-
-            Der enthaltene SHA-256-Prüfwert ist als separates Asset beigefügt.
+            Das Asset `uc-intg-homeassistantcustom-aarch64.tar.gz` ist direkt im Web-Configurator der Unfolded Circle Remote 3 unter **Install custom** verwendbar.
           files: |
             uc-intg-${{ env.INTG_NAME }}-aarch64.tar.gz
             uc-intg-${{ env.INTG_NAME }}-aarch64.tar.gz.sha256

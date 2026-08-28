@@ -1,16 +1,16 @@
 {
-  "driver_id": "homeassistantcustom",
-  "version": "1.0.9",
-  "release_date": "2026-08-28",
+  "driver_id": "stehlampe-ha",
+  "version": "1.1.0",
+  "release_date": "2026-08-29",
   "min_core_api": "0.20.0",
   "name": {
-    "en": "Home Assistant Custom Commands",
-    "de": "Home Assistant eigene Befehle"
+    "en": "Stehlampe",
+    "de": "Stehlampe"
   },
   "icon": "uc:integration",
   "description": {
-    "en": "Standalone Home Assistant command integration for a floor lamp",
-    "de": "Eigenständige Home-Assistant-Befehlsintegration für eine Stehlampe"
+    "en": "Standalone Home Assistant control for a floor lamp",
+    "de": "Eigenständige Home-Assistant-Steuerung für eine Stehlampe"
   },
   "developer": {
     "name": "Marci",
@@ -45,42 +45,6 @@
         "field": {
           "text": {
             "value": ""
-          }
-        }
-      },
-      {
-        "id": "ha_remote_entity",
-        "label": {
-          "en": "Home Assistant remote entity",
-          "de": "Home-Assistant-Remote-Entity"
-        },
-        "field": {
-          "text": {
-            "value": "remote.broadlink"
-          }
-        }
-      },
-      {
-        "id": "device",
-        "label": {
-          "en": "Remote device name",
-          "de": "Name des Remote-Geräts"
-        },
-        "field": {
-          "text": {
-            "value": "Stehlampe"
-          }
-        }
-      },
-      {
-        "id": "delay_secs",
-        "label": {
-          "en": "Command delay (seconds)",
-          "de": "Befehlsverzögerung (Sekunden)"
-        },
-        "field": {
-          "text": {
-            "value": "0.4"
           }
         }
       }
